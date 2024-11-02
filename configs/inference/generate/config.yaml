@@ -1,7 +1,7 @@
 defaults:
   - generate_kwargs: v1
   - prompt_sources: v1
-  - get_pipeline: get_sd3_quantized_pipeline.yaml
+  - get_pipeline: get_sd35_quantized_pipeline
 
 
 num_images: 100

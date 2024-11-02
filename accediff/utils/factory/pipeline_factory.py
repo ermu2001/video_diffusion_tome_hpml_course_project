@@ -1,13 +1,11 @@
 import torch
 from diffusers import StableDiffusion3Pipeline
-
-
-import torch
-from diffusers import StableDiffusion3Pipeline
 from transformers import T5EncoderModel, BitsAndBytesConfig
+import logging
+logger = logging.getLogger(__name__)
 
 def get_sd3_quantized_pipeline(repo_id="stabilityai/stable-diffusion-3-medium-diffusers", drop_text_encoder_3=True):
-
+    logger.info(f"Loading model from {repo_id}")
     torch.set_float32_matmul_precision("high")
     torch._inductor.config.conv_1x1_as_mm = True
     torch._inductor.config.coordinate_descent_tuning = True
@@ -36,17 +34,18 @@ def get_sd3_quantized_pipeline(repo_id="stabilityai/stable-diffusion-3-medium-di
         torch_dtype=torch.float16,
         **extra_kwargs,
     )
-    pipe.set_progress_bar_config(disable=False)
-    pipe.transformer.to(memory_format=torch.channels_last)
-    pipe.vae.to(memory_format=torch.channels_last)
+    pipe.set_progress_bar_config(disable=True)
+    # pipe.transformer.to(memory_format=torch.channels_last)
+    # pipe.vae.to(memory_format=torch.channels_last)
 
-    pipe.transformer = torch.compile(pipe.transformer, mode="max-autotune", fullgraph=True)
-    pipe.vae.decode = torch.compile(pipe.vae.decode, mode="max-autotune", fullgraph=True)
+    # pipe.transformer = torch.compile(pipe.transformer, mode="max-autotune", fullgraph=True)
+    # pipe.vae.decode = torch.compile(pipe.vae.decode, mode="max-autotune", fullgraph=True)
 
-    # Warm Up
-    prompt = "a photo of a cat holding a sign that says hello world"
-    for _ in range(3):
-        _ = pipe(prompt=prompt, generator=torch.manual_seed(1))
+    # # Warm Up
+    # prompt = "a photo of a cat holding a sign that says hello world"
+    # for _ in range(3):
+    #     image = pipe(prompt=prompt, generator=torch.manual_seed(1))
+    #     logger.info(f"Warming up output {image}")
 
 
     # pipe.enable_model_cpu_offload()
