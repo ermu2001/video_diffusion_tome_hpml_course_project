@@ -1,0 +1,8 @@
+defaults:
+  - _self_
+  - data: v1
+  - model: v1
+  - status: v1
+  - train: v1
+
+hf_token: ${oc.env:HF_TOKEN,""}

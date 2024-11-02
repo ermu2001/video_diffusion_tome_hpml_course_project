@@ -1,0 +1,6 @@
+wandb
+webdataset
+braceexpand
+peft
+git+https://github.com/huggingface/diffusers
+xformers --no-deps
