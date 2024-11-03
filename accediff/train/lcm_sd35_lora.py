@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 
+import copy
 import functools
 import gc
 import itertools
@@ -58,10 +59,11 @@ from diffusers import (
     FlowMatchEulerDiscreteScheduler,
     LCMScheduler,
     StableDiffusion3Pipeline,
-    SD3Transformer2DModel
+    SD3Transformer2DModel,
+    DDPMScheduler,
 )
 from diffusers.optimization import get_scheduler
-from diffusers.training_utils import resolve_interpolation_mode
+from diffusers.training_utils import resolve_interpolation_mode, free_memory, compute_density_for_timestep_sampling
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
@@ -480,10 +482,14 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
             ).repo_id
 
     # 1. Create the noise scheduler and the desired noise schedule.
-    noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+    noise_scheduler_flow_match = FlowMatchEulerDiscreteScheduler.from_pretrained(
         args.model.pretrained_teacher_model, subfolder="scheduler", revision=args.model.teacher_revision
     )
-
+    # noise_scheduler_copy = copy.deepcopy(noise_scheduler)
+    noise_scheduler = DDPMScheduler(
+        num_train_timesteps=noise_scheduler_flow_match.config.num_train_timesteps,
+        prediction_type="epsilon",
+    )
     # DDPMScheduler calculates the alpha and sigma noise schedules (based on the alpha bars) for us
     alpha_schedule = torch.sqrt(noise_scheduler.alphas_cumprod)
     sigma_schedule = torch.sqrt(1 - noise_scheduler.alphas_cumprod)
@@ -505,10 +511,17 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
 
     # 3. Load text encoders from SD 1.X/2.X checkpoint.
     # import correct text encoder classes
-    text_encoder = CLIPTextModel.from_pretrained(
+    text_encoder_cls = import_model_class_from_model_name_or_path(
+        args.model.pretrained_teacher_model, args.model.teacher_revision, subfolder="text_encoder"
+    )
+    text_encoder = text_encoder_cls.from_pretrained(
         args.model.pretrained_teacher_model, subfolder="text_encoder", revision=args.model.teacher_revision
     )
-    text_encoder_2 = CLIPTextModel.from_pretrained(
+    
+    text_encoder_2_cls = import_model_class_from_model_name_or_path(
+        args.model.pretrained_teacher_model, args.model.teacher_revision, subfolder="text_encoder_2"
+    )
+    text_encoder_2 = text_encoder_2_cls.from_pretrained(
         args.model.pretrained_teacher_model, subfolder="text_encoder_2", revision=args.model.teacher_revision
     )
 
@@ -556,16 +569,8 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
             "to_q",
             "to_k",
             "to_v",
-            "to_out.0",
-            "proj_in",
             "proj_out",
-            "ff.net.0.proj",
-            "ff.net.2",
-            "conv1",
-            "conv2",
-            "conv_shortcut",
-            "downsamplers.0.conv",
-            "upsamplers.0.conv",
+            "context_embedder",
             "time_emb_proj",
         ]
     lora_config = LoraConfig(
@@ -693,7 +698,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
     # 13. Dataset creation and data processing
     # Here, we compute not just the text embeddings but also the additional embeddings
     # needed for the SD 3.5 transformer to operate.
-    def compute_embeddings(prompt_batch, proportion_empty_prompts, text_encoder, tokenizer, is_train=True):
+    def compute_embeddings(prompt_batch, proportion_empty_prompts, is_train=True):
         captions = []
         for caption in prompt_batch:
             if random.random() < proportion_empty_prompts:
@@ -710,7 +715,9 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                 negative_prompt_embeds,
                 pooled_prompt_embeds,
                 negative_pooled_prompt_embeds,
-            ) = pipe.encode_prompt(captions)
+            ) = pipe.encode_prompt(captions, captions, captions, 
+                                   device=accelerator.device,
+                                   do_classifier_free_guidance=False)
 
         return {
             "prompt_embeds": prompt_embeds,
@@ -737,8 +744,6 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
     compute_embeddings_fn = functools.partial(
         compute_embeddings,
         proportion_empty_prompts=0,
-        text_encoder=text_encoder,
-        tokenizer=tokenizer,
     )
 
     # 14. LR Scheduler creation
@@ -773,10 +778,9 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
         tracker_config = dict(args)
         accelerator.init_trackers(args.status.tracker_project_name, config=tracker_config)
 
-    uncond_input_ids = tokenizer(
-        [""] * args.train.per_device_train_batch_size, return_tensors="pt", padding="max_length", max_length=77
-    ).input_ids.to(accelerator.device)
-    uncond_prompt_embeds = text_encoder(uncond_input_ids)[0]
+    uncond_encoded_text = compute_embeddings([""] * args.train.per_device_train_batch_size, 0, is_train=False)
+    uncond_prompt_embeds = uncond_encoded_text.pop("prompt_embeds")
+    uncond_pooled_projections = uncond_encoded_text.pop("pooled_prompt_embeds")
 
     if torch.backends.mps.is_available():
         autocast_ctx = nullcontext()
@@ -874,6 +878,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
 
                 # 4. Sample noise from the prior and add it to the latents according to the noise magnitude at each
                 # timestep (this is the forward diffusion process) [z_{t_{n + k}} in Algorithm 1]
+                # TODO: switch to flow match scheduler distillation process
                 noise = torch.randn_like(latents)
                 noisy_model_input = noise_scheduler.add_noise(latents, noise, start_timesteps)
 
@@ -891,7 +896,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                 noise_pred = transformer(
                     hidden_states=noisy_model_input,
                     pooled_projections=pooled_projections,
-                    timesteps=start_timesteps,
+                    timestep=start_timesteps,
                     encoder_hidden_states=prompt_embeds.float(),
                 ).sample
 
@@ -914,8 +919,9 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                     with autocast_ctx:
                         # 1. Get teacher model prediction on noisy_model_input z_{t_{n + k}} and conditional embedding c
                         cond_teacher_output = teacher_transformer(
-                            noisy_model_input.to(weight_dtype),
-                            start_timesteps,
+                            hidden_states=noisy_model_input.to(weight_dtype),
+                            pooled_projections=pooled_projections.to(weight_dtype),
+                            timestep=start_timesteps,
                             encoder_hidden_states=prompt_embeds.to(weight_dtype),
                         ).sample
                         cond_pred_x0 = get_predicted_original_sample(
@@ -937,8 +943,9 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
 
                         # 2. Get teacher model prediction on noisy_model_input z_{t_{n + k}} and unconditional embedding 0
                         uncond_teacher_output = teacher_transformer(
-                            noisy_model_input.to(weight_dtype),
-                            start_timesteps,
+                            hidden_states=noisy_model_input.to(weight_dtype),
+                            pooled_projections=uncond_pooled_projections.to(weight_dtype),
+                            timestep=start_timesteps,
                             encoder_hidden_states=uncond_prompt_embeds.to(weight_dtype),
                         ).sample
                         uncond_pred_x0 = get_predicted_original_sample(
@@ -972,9 +979,9 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                 with torch.no_grad():
                     with autocast_ctx:
                         target_noise_pred = transformer(
-                            x_prev.float(),
-                            timesteps,
-                            timestep_cond=None,
+                            hidden_states=x_prev.float(),
+                            timestep=timesteps,
+                            pooled_projections=pooled_projections,
                             encoder_hidden_states=prompt_embeds.float(),
                         ).sample
                     pred_x_0 = get_predicted_original_sample(
@@ -1036,6 +1043,8 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
 
                     if global_step % args.train.validation_steps == 0:
                         log_validation(vae, transformer, args, accelerator, weight_dtype, global_step)
+                    
+                    free_memory()
 
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
@@ -1063,7 +1072,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
     accelerator.end_training()
 
 
-@hydra.main(config_path=f"{LOCAL_PATH}/configs/train/lcm_sd2", config_name="config")
+@hydra.main(config_path=f"{LOCAL_PATH}/configs/train/lcm_sd35_lora", config_name="config")
 def main(args: DictConfig) -> None:
     # rewrite some arguments
     assert args.train.per_device_train_batch_size is None

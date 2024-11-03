@@ -1072,7 +1072,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
     accelerator.end_training()
 
 
-@hydra.main(config_path=f"{LOCAL_PATH}/configs/train/lcm_sd2", config_name="config")
+@hydra.main(config_path=f"{LOCAL_PATH}/configs/train/lcm_sd2_lora", config_name="config")
 def main(args: DictConfig) -> None:
     # rewrite some arguments
     assert args.train.per_device_train_batch_size is None
