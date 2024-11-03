@@ -1,0 +1,44 @@
+global_train_batch_size: 128 
+per_device_train_batch_size: null # determined by num_processes and gradient_accumulation_steps
+# train_batch_size: 12
+num_train_epochs: 100
+max_train_steps: 1000
+max_train_samples: 4000000
+
+learning_rate: 1e-6
+scale_lr: false
+lr_scheduler: "constant"
+lr_warmup_steps: 100
+gradient_accumulation_steps: 4
+
+use_8bit_adam: true
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_weight_decay: 0.0
+adam_epsilon: 1e-08
+max_grad_norm: 1.0
+
+proportion_empty_prompts: 0.0
+w_min: 5.0
+w_max: 15.0
+num_ddim_timesteps: 50
+loss_type: "huber"
+huber_c: 0.001
+lora_rank: 64
+lora_alpha: 64
+lora_dropout: 0.0
+lora_target_modules: null
+
+vae_encode_batch_size: 32
+timestep_scaling_factor: 10.0
+
+mixed_precision: bf16  # Options: ["no", "fp16", "bf16"]
+allow_tf32: false
+cast_teacher_transformer: false
+
+enable_xformers_memory_efficient_attention: true
+gradient_checkpointing: true
+
+local_rank: -1
+
+validation_steps: 200

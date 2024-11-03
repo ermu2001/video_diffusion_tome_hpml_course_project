@@ -1,4 +1,4 @@
-output_dir: "lcm-xl-distilled"
+output_dir: "lcm-xl-distilled-lora"
 cache_dir: "./tmp/cache"
 seed: 42
 checkpointing_steps: 500
