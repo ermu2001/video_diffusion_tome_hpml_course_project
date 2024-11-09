@@ -345,16 +345,36 @@ def scalings_for_boundary_conditions(timestep, sigma_data=0.5, timestep_scaling=
     return c_skip, c_out
 
 
+# # Compare LCMScheduler.step, Step 4
+# def get_predicted_original_sample(model_output, timesteps, sample, prediction_type, alphas, sigmas):
+#     alphas = extract_into_tensor(alphas, timesteps, sample.shape)
+#     sigmas = extract_into_tensor(sigmas, timesteps, sample.shape)
+#     if prediction_type == "epsilon":
+#         pred_x_0 = (sample - sigmas * model_output) / alphas
+#     elif prediction_type == "sample":
+#         pred_x_0 = model_output
+#     elif prediction_type == "v_prediction":
+#         pred_x_0 = alphas * sample - sigmas * model_output
+#     else:
+#         raise ValueError(
+#             f"Prediction type {prediction_type} is not supported; currently, `epsilon`, `sample`, and `v_prediction`"
+#             f" are supported."
+#         )
+
+#     return pred_x_0
+
+
 # Compare LCMScheduler.step, Step 4
-def get_predicted_original_sample(model_output, timesteps, sample, prediction_type, alphas, sigmas):
-    alphas = extract_into_tensor(alphas, timesteps, sample.shape)
-    sigmas = extract_into_tensor(sigmas, timesteps, sample.shape)
+# for flow match
+def get_predicted_original_sample_flow_match(model_output, timesteps, sample, prediction_type, sigmas):
+    # alphas = extract_into_tensor(alphas, timesteps, sample.shape)
+    sigmas = extract_into_tensor(sigmas, timesteps.clip(0, len(sigmas)-1).to(dtype=torch.int64), sample.shape)
     if prediction_type == "epsilon":
-        pred_x_0 = (sample - sigmas * model_output) / alphas
+        pred_x_0 = (sample - sigmas * model_output)
     elif prediction_type == "sample":
         pred_x_0 = model_output
     elif prediction_type == "v_prediction":
-        pred_x_0 = alphas * sample - sigmas * model_output
+        pred_x_0 = sample - sigmas * model_output
     else:
         raise ValueError(
             f"Prediction type {prediction_type} is not supported; currently, `epsilon`, `sample`, and `v_prediction`"
@@ -364,16 +384,34 @@ def get_predicted_original_sample(model_output, timesteps, sample, prediction_ty
     return pred_x_0
 
 
+# # Based on step 4 in DDIMScheduler.step
+# def get_predicted_noise(model_output, timesteps, sample, prediction_type, alphas, sigmas):
+#     alphas = extract_into_tensor(alphas, timesteps, sample.shape)
+#     sigmas = extract_into_tensor(sigmas, timesteps, sample.shape)
+#     if prediction_type == "epsilon":
+#         pred_epsilon = model_output
+#     elif prediction_type == "sample":
+#         pred_epsilon = (sample - alphas * model_output) / sigmas
+#     elif prediction_type == "v_prediction":
+#         pred_epsilon = alphas * model_output + sigmas * sample
+#     else:
+#         raise ValueError(
+#             f"Prediction type {prediction_type} is not supported; currently, `epsilon`, `sample`, and `v_prediction`"
+#             f" are supported."
+#         )
+
+#     return pred_epsilon
+
+
 # Based on step 4 in DDIMScheduler.step
-def get_predicted_noise(model_output, timesteps, sample, prediction_type, alphas, sigmas):
-    alphas = extract_into_tensor(alphas, timesteps, sample.shape)
-    sigmas = extract_into_tensor(sigmas, timesteps, sample.shape)
+def get_predicted_noise_flow_match(model_output, timesteps, sample, prediction_type, sigmas):
+    sigmas = extract_into_tensor(sigmas, timesteps.clip(0, len(sigmas)-1).to(dtype=torch.int64), sample.shape)
     if prediction_type == "epsilon":
         pred_epsilon = model_output
     elif prediction_type == "sample":
-        pred_epsilon = (sample - alphas * model_output) / sigmas
+        pred_epsilon = (sample - model_output) / sigmas
     elif prediction_type == "v_prediction":
-        pred_epsilon = alphas * model_output + sigmas * sample
+        pred_epsilon = model_output + sigmas * sample
     else:
         raise ValueError(
             f"Prediction type {prediction_type} is not supported; currently, `epsilon`, `sample`, and `v_prediction`"
@@ -385,6 +423,9 @@ def get_predicted_noise(model_output, timesteps, sample, prediction_type, alphas
 
 def extract_into_tensor(a, t, x_shape):
     b, *_ = t.shape
+    # assert torch.all(t >= 0) and torch.all(t < a.shape[0])
+    if not torch.all(t >= 0) or not torch.all(t < a.shape[0]):
+        raise ValueError(f"t is out of bounds: {t}, {a.shape[0]}")
     out = a.gather(-1, t)
     return out.reshape(b, *((1,) * (len(x_shape) - 1)))
 
@@ -485,20 +526,30 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
     noise_scheduler_flow_match = FlowMatchEulerDiscreteScheduler.from_pretrained(
         args.model.pretrained_teacher_model, subfolder="scheduler", revision=args.model.teacher_revision
     )
-    # noise_scheduler_copy = copy.deepcopy(noise_scheduler)
-    noise_scheduler = DDPMScheduler(
-        num_train_timesteps=noise_scheduler_flow_match.config.num_train_timesteps,
-        prediction_type="epsilon",
-    )
-    # DDPMScheduler calculates the alpha and sigma noise schedules (based on the alpha bars) for us
-    alpha_schedule = torch.sqrt(noise_scheduler.alphas_cumprod)
-    sigma_schedule = torch.sqrt(1 - noise_scheduler.alphas_cumprod)
-    # Initialize the DDIM ODE solver for distillation.
-    solver = DDIMSolver(
-        noise_scheduler.alphas_cumprod.numpy(),
-        timesteps=noise_scheduler.config.num_train_timesteps,
-        ddim_timesteps=args.train.num_ddim_timesteps,
-    )
+    prediction_type = "epsilon"
+    # # disable this for flow match
+    # # noise_scheduler_copy = copy.deepcopy(noise_scheduler)
+    # noise_scheduler = DDPMScheduler(
+    #     num_train_timesteps=noise_scheduler_flow_match.config.num_train_timesteps,
+    #     prediction_type="epsilon",
+    # )
+    # # DDPMScheduler calculates the alpha and sigma noise schedules (based on the alpha bars) for us
+    # alpha_schedule = torch.sqrt(noise_scheduler.alphas_cumprod)
+    # sigma_schedule = torch.sqrt(1 - noise_scheduler.alphas_cumprod)
+    # # Initialize the DDIM ODE solver for distillation.
+    # solver = DDIMSolver(
+    #     noise_scheduler.alphas_cumprod.numpy(),
+    #     timesteps=noise_scheduler.config.num_train_timesteps,
+    #     ddim_timesteps=args.train.num_ddim_timesteps,
+    # )
+
+    # # flow match implementation
+    # alpha_schedule = torch.sqrt(noise_scheduler_flow_match.alphas_cumprod)
+    noise_scheduler = copy.deepcopy(noise_scheduler_flow_match)
+    sigma_schedule = noise_scheduler.sigmas.to(accelerator.device)
+    
+    noise_scheduler_flow_match.set_timesteps(args.train.num_ddim_timesteps)
+    backward_sigmas_schedule = noise_scheduler_flow_match.sigmas.to(accelerator.device)
 
     # 2. Load tokenizers from SD 3.5 checkpoint.
     tokenizer = AutoTokenizer.from_pretrained(
@@ -604,11 +655,11 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
         teacher_transformer.to(dtype=weight_dtype)
 
     # Also move the alpha and sigma noise schedules to accelerator.device.
-    alpha_schedule = alpha_schedule.to(accelerator.device)
-    sigma_schedule = sigma_schedule.to(accelerator.device)
+    # alpha_schedule = alpha_schedule.to(accelerator.device) # disable this for flow match
+    # sigma_schedule = sigma_schedule.to(accelerator.device)
     # Move the ODE solver to accelerator.device.
-    solver = solver.to(accelerator.device)
-
+    # solver = solver.to(accelerator.device) # disable this for flow match
+    solver_timesteps = torch.from_numpy(noise_scheduler_flow_match.timesteps.numpy()).to(accelerator.device)
     # 10. Handle saving and loading of checkpoints
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
@@ -861,8 +912,10 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                 # 2. Sample a random timestep for each image t_n from the ODE solver timesteps without bias.
                 # For the DDIM solver, the timestep schedule is [T - 1, T - k - 1, T - 2 * k - 1, ...]
                 topk = noise_scheduler.config.num_train_timesteps // args.train.num_ddim_timesteps
+                # index = torch.randint(0, args.train.num_ddim_timesteps, (bsz,), device=latents.device).long() # disable this for flow match
                 index = torch.randint(0, args.train.num_ddim_timesteps, (bsz,), device=latents.device).long()
-                start_timesteps = solver.ddim_timesteps[index]
+                # start_timesteps = solver.ddim_timesteps[index] # disable this for flow match
+                start_timesteps = solver_timesteps[index]
                 timesteps = start_timesteps - topk
                 timesteps = torch.where(timesteps < 0, torch.zeros_like(timesteps), timesteps)
 
@@ -880,7 +933,8 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                 # timestep (this is the forward diffusion process) [z_{t_{n + k}} in Algorithm 1]
                 # TODO: switch to flow match scheduler distillation process
                 noise = torch.randn_like(latents)
-                noisy_model_input = noise_scheduler.add_noise(latents, noise, start_timesteps)
+                # noisy_model_input = noise_scheduler.add_noise(latents, noise, start_timesteps) # disable this for flow match
+                noisy_model_input = noise_scheduler_flow_match.scale_noise(latents, start_timesteps, noise)
 
                 # 5. Sample a random guidance scale w from U[w_min, w_max]
                 # Note that for LCM-LoRA distillation it is not necessary to use a guidance scale embedding
@@ -900,12 +954,20 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                     encoder_hidden_states=prompt_embeds.float(),
                 ).sample
 
-                pred_x_0 = get_predicted_original_sample(
+                # pred_x_0 = get_predicted_original_sample(
+                #     noise_pred,
+                #     start_timesteps,
+                #     noisy_model_input,
+                #     noise_scheduler.config.prediction_type,
+                #     alpha_schedule,
+                #     sigma_schedule,
+                # )
+
+                pred_x_0 = get_predicted_original_sample_flow_match(
                     noise_pred,
                     start_timesteps,
                     noisy_model_input,
-                    noise_scheduler.config.prediction_type,
-                    alpha_schedule,
+                    prediction_type,
                     sigma_schedule,
                 )
 
@@ -924,20 +986,34 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                             timestep=start_timesteps,
                             encoder_hidden_states=prompt_embeds.to(weight_dtype),
                         ).sample
-                        cond_pred_x0 = get_predicted_original_sample(
+                        # cond_pred_x0 = get_predicted_original_sample(
+                        #     cond_teacher_output,
+                        #     start_timesteps,
+                        #     noisy_model_input,
+                        #     noise_scheduler.config.prediction_type,
+                        #     alpha_schedule,
+                        #     sigma_schedule,
+                        # )
+                        cond_pred_x0 = get_predicted_original_sample_flow_match(
                             cond_teacher_output,
                             start_timesteps,
                             noisy_model_input,
-                            noise_scheduler.config.prediction_type,
-                            alpha_schedule,
+                            prediction_type,
                             sigma_schedule,
                         )
-                        cond_pred_noise = get_predicted_noise(
+                        # cond_pred_noise = get_predicted_noise(
+                        #     cond_teacher_output,
+                        #     start_timesteps,
+                        #     noisy_model_input,
+                        #     noise_scheduler.config.prediction_type,
+                        #     alpha_schedule,
+                        #     sigma_schedule,
+                        # )
+                        cond_pred_noise = get_predicted_noise_flow_match(
                             cond_teacher_output,
                             start_timesteps,
                             noisy_model_input,
-                            noise_scheduler.config.prediction_type,
-                            alpha_schedule,
+                            prediction_type,
                             sigma_schedule,
                         )
 
@@ -948,20 +1024,34 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                             timestep=start_timesteps,
                             encoder_hidden_states=uncond_prompt_embeds.to(weight_dtype),
                         ).sample
-                        uncond_pred_x0 = get_predicted_original_sample(
+                        # uncond_pred_x0 = get_predicted_original_sample(
+                        #     uncond_teacher_output,
+                        #     start_timesteps,
+                        #     noisy_model_input,
+                        #     noise_scheduler.config.prediction_type,
+                        #     alpha_schedule,
+                        #     sigma_schedule,
+                        # )
+                        uncond_pred_x0 = get_predicted_original_sample_flow_match(
                             uncond_teacher_output,
                             start_timesteps,
                             noisy_model_input,
-                            noise_scheduler.config.prediction_type,
-                            alpha_schedule,
+                            prediction_type,
                             sigma_schedule,
                         )
-                        uncond_pred_noise = get_predicted_noise(
+                        # uncond_pred_noise = get_predicted_noise(
+                        #     uncond_teacher_output,
+                        #     start_timesteps,
+                        #     noisy_model_input,
+                        #     noise_scheduler.config.prediction_type,
+                        #     alpha_schedule,
+                        #     sigma_schedule,
+                        # )
+                        uncond_pred_noise = get_predicted_noise_flow_match(
                             uncond_teacher_output,
                             start_timesteps,
                             noisy_model_input,
-                            noise_scheduler.config.prediction_type,
-                            alpha_schedule,
+                            prediction_type,
                             sigma_schedule,
                         )
 
@@ -972,8 +1062,12 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                         # 4. Run one step of the ODE solver to estimate the next point x_prev on the
                         # augmented PF-ODE trajectory (solving backward in time)
                         # Note that the DDIM step depends on both the predicted x_0 and source noise eps_0.
-                        x_prev = solver.ddim_step(pred_x0, pred_noise, index)
-
+                        # x_prev = solver.ddim_step(pred_x0, pred_noise, index) # disabled, using scheduler to ensure coherence
+                        
+                        # sigma_next = backward_sigmas_schedule[torch.clip(index + 1, 0, len(backward_sigmas_schedule) - 1)] # no need for this, took care by scheduler imple
+                        # sigma_next = backward_sigmas_schedule[index + 1].to(pred_x0.device)
+                        sigma_next = extract_into_tensor(backward_sigmas_schedule, index + 1, pred_x0.shape).to(pred_x0.device) # this is safe since backward_sigmas_schedule is accounted for 1 more length
+                        x_prev = pred_x0 + sigma_next * pred_noise
                 # 9. Get target LCM prediction on x_prev, w, c, t_n (timesteps)
                 # Note that we do not use a separate target network for LCM-LoRA distillation.
                 with torch.no_grad():
@@ -984,12 +1078,19 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                             pooled_projections=pooled_projections,
                             encoder_hidden_states=prompt_embeds.float(),
                         ).sample
-                    pred_x_0 = get_predicted_original_sample(
+                    # pred_x_0 = get_predicted_original_sample(
+                    #     target_noise_pred,
+                    #     timesteps,
+                    #     x_prev,
+                    #     noise_scheduler.config.prediction_type,
+                    #     alpha_schedule,
+                    #     sigma_schedule,
+                    # )
+                    pred_x_0 = get_predicted_original_sample_flow_match(
                         target_noise_pred,
                         timesteps,
                         x_prev,
-                        noise_scheduler.config.prediction_type,
-                        alpha_schedule,
+                        prediction_type,
                         sigma_schedule,
                     )
                     target = c_skip * x_prev + c_out * pred_x_0
