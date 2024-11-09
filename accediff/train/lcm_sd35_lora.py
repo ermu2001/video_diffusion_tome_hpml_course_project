@@ -81,6 +81,11 @@ check_min_version("0.32.0.dev0")
 
 logger = get_logger(__name__)
 
+def _debug_save_image_from_latent(latents, filename, pipe=None):
+    latents = (latents.detach().to(dtype=pipe.dtype) / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
+    image = pipe.vae.decode(latents, return_dict=False)[0]
+    image = pipe.image_processor.postprocess(image, output_type='pil')[0]
+    image.save(filename)
 
 def get_module_kohya_state_dict(module, prefix: str, dtype: torch.dtype, adapter_name: str = "default"):
     kohya_ss_state_dict = {}
@@ -256,7 +261,7 @@ def log_validation(vae, transformer, args, accelerator, weight_dtype, step):
         vae=vae,
         text_encoder_3=None,
         tokenizer_3=None,
-        scheduler=LCMScheduler.from_pretrained(args.model.pretrained_teacher_model, subfolder="scheduler"),
+        # scheduler=LCMScheduler.from_pretrained(args.model.pretrained_teacher_model, subfolder="scheduler"),
         revision=args.model.revision,
         torch_dtype=weight_dtype,
         safety_checker=None,
@@ -746,6 +751,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
         text_encoder_3=None,
         tokenizer_3=None,
     )
+    debug_save_image_from_latent = functools.partial(_debug_save_image_from_latent, pipe=pipe)
     # 13. Dataset creation and data processing
     # Here, we compute not just the text embeddings but also the additional embeddings
     # needed for the SD 3.5 transformer to operate.
@@ -918,7 +924,6 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                 start_timesteps = solver_timesteps[index]
                 timesteps = start_timesteps - topk
                 timesteps = torch.where(timesteps < 0, torch.zeros_like(timesteps), timesteps)
-
                 # 3. Get boundary scalings for start_timesteps and (end) timesteps.
                 c_skip_start, c_out_start = scalings_for_boundary_conditions(
                     start_timesteps, timestep_scaling=args.train.timestep_scaling_factor
@@ -970,7 +975,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                     prediction_type,
                     sigma_schedule,
                 )
-
+                debug_save_image_from_latent(pred_x_0, f"pred_x_0_{global_step}.png")
                 model_pred = c_skip_start * noisy_model_input + c_out_start * pred_x_0
 
                 # 8. Compute the conditional and unconditional teacher model predictions to get CFG estimates of the
@@ -1057,7 +1062,12 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
 
                         # 3. Calculate the CFG estimate of x_0 (pred_x0) and eps_0 (pred_noise)
                         # Note that this uses the LCM paper's CFG formulation rather than the Imagen CFG formulation
+                        
                         pred_x0 = cond_pred_x0 + w * (cond_pred_x0 - uncond_pred_x0)
+                        debug_save_image_from_latent(pred_x0, f"teacher_pred_x0_{global_step}.png")
+                        debug_save_image_from_latent(cond_pred_x0, f"teacher_cond_pred_x0_{global_step}.png")
+                        debug_save_image_from_latent(uncond_pred_x0, f"teacher_uncond_pred_x0_{global_step}.png")
+
                         pred_noise = cond_pred_noise + w * (cond_pred_noise - uncond_pred_noise)
                         # 4. Run one step of the ODE solver to estimate the next point x_prev on the
                         # augmented PF-ODE trajectory (solving backward in time)
@@ -1093,6 +1103,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                         prediction_type,
                         sigma_schedule,
                     )
+                    debug_save_image_from_latent(pred_x_0, f"target_pred_x0_{global_step}.png")
                     target = c_skip * x_prev + c_out * pred_x_0
 
                 # 10. Calculate loss
@@ -1110,7 +1121,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
-
+            import pdb; pdb.set_trace()
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
                 progress_bar.update(1)
