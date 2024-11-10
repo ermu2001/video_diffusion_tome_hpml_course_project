@@ -25,7 +25,7 @@ import random
 import shutil
 from contextlib import nullcontext
 from pathlib import Path
-from typing import List, Union
+from typing import List, Tuple, Union
 
 import accelerate
 import numpy as np
@@ -82,9 +82,10 @@ check_min_version("0.32.0.dev0")
 logger = get_logger(__name__)
 
 def _debug_save_image_from_latent(latents, filename, pipe=None):
-    latents = (latents.detach().to(dtype=pipe.dtype) / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
+    latents = (latents[[0]].detach().to(dtype=pipe.dtype) / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
     image = pipe.vae.decode(latents, return_dict=False)[0]
     image = pipe.image_processor.postprocess(image, output_type='pil')[0]
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
     image.save(filename)
 
 def get_module_kohya_state_dict(module, prefix: str, dtype: torch.dtype, adapter_name: str = "default"):
@@ -665,6 +666,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
     # Move the ODE solver to accelerator.device.
     # solver = solver.to(accelerator.device) # disable this for flow match
     solver_timesteps = torch.from_numpy(noise_scheduler_flow_match.timesteps.numpy()).to(accelerator.device)
+    # topk_by_timestep = 
     # 10. Handle saving and loading of checkpoints
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
@@ -891,7 +893,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
         # Only show the progress bar once on each machine.
         disable=not accelerator.is_local_main_process,
     )
-
+    debug_savings: List[Tuple] = []
     for epoch in range(first_epoch, args.train.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(transformer):
@@ -917,11 +919,16 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
 
                 # 2. Sample a random timestep for each image t_n from the ODE solver timesteps without bias.
                 # For the DDIM solver, the timestep schedule is [T - 1, T - k - 1, T - 2 * k - 1, ...]
-                topk = noise_scheduler.config.num_train_timesteps // args.train.num_ddim_timesteps
+                # topk = noise_scheduler.config.num_train_timesteps // args.train.num_ddim_timesteps # disable this for flow match
+                # flow match's topk is not static for each step
+                # topk = ... # TODO: implement this
+
                 # index = torch.randint(0, args.train.num_ddim_timesteps, (bsz,), device=latents.device).long() # disable this for flow match
                 index = torch.randint(0, args.train.num_ddim_timesteps, (bsz,), device=latents.device).long()
                 # start_timesteps = solver.ddim_timesteps[index] # disable this for flow match
                 start_timesteps = solver_timesteps[index]
+                topk = start_timesteps - solver_timesteps.gather(0, torch.clip(index + 1, 0, len(solver_timesteps)-1))
+
                 timesteps = start_timesteps - topk
                 timesteps = torch.where(timesteps < 0, torch.zeros_like(timesteps), timesteps)
                 # 3. Get boundary scalings for start_timesteps and (end) timesteps.
@@ -975,8 +982,9 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                     prediction_type,
                     sigma_schedule,
                 )
-                debug_save_image_from_latent(pred_x_0, f"pred_x_0_{global_step}.png")
                 model_pred = c_skip_start * noisy_model_input + c_out_start * pred_x_0
+                debug_savings.append((pred_x_0.detach(), f"step_{global_step}/model--pred_x_0.png"))
+                debug_savings.append((model_pred.detach(), f"step_{global_step}/model--model_pred_consistency.png"))
 
                 # 8. Compute the conditional and unconditional teacher model predictions to get CFG estimates of the
                 # predicted noise eps_0 and predicted original sample x_0, then run the ODE solver using these
@@ -1064,9 +1072,9 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                         # Note that this uses the LCM paper's CFG formulation rather than the Imagen CFG formulation
                         
                         pred_x0 = cond_pred_x0 + w * (cond_pred_x0 - uncond_pred_x0)
-                        debug_save_image_from_latent(pred_x0, f"teacher_pred_x0_{global_step}.png")
-                        debug_save_image_from_latent(cond_pred_x0, f"teacher_cond_pred_x0_{global_step}.png")
-                        debug_save_image_from_latent(uncond_pred_x0, f"teacher_uncond_pred_x0_{global_step}.png")
+                        debug_savings.append((pred_x0.detach(), f"step_{global_step}/teacher--pred_x0.png"))
+                        debug_savings.append((cond_pred_x0.detach(), f"step_{global_step}/teacher--cond_pred_x0.png"))
+                        debug_savings.append((uncond_pred_x0.detach(), f"step_{global_step}/teacher--uncond_pred_x0.png"))
 
                         pred_noise = cond_pred_noise + w * (cond_pred_noise - uncond_pred_noise)
                         # 4. Run one step of the ODE solver to estimate the next point x_prev on the
@@ -1078,11 +1086,13 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                         # sigma_next = backward_sigmas_schedule[index + 1].to(pred_x0.device)
                         sigma_next = extract_into_tensor(backward_sigmas_schedule, index + 1, pred_x0.shape).to(pred_x0.device) # this is safe since backward_sigmas_schedule is accounted for 1 more length
                         x_prev = pred_x0 + sigma_next * pred_noise
+                        debug_savings.append((uncond_pred_x0.detach(), f"step_{global_step}/teacher--x_prev.png"))
+
                 # 9. Get target LCM prediction on x_prev, w, c, t_n (timesteps)
                 # Note that we do not use a separate target network for LCM-LoRA distillation.
                 with torch.no_grad():
                     with autocast_ctx:
-                        target_noise_pred = transformer(
+                        target_noise_pred = transformer( # TODO:consider using teacher_transformer
                             hidden_states=x_prev.float(),
                             timestep=timesteps,
                             pooled_projections=pooled_projections,
@@ -1103,8 +1113,9 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                         prediction_type,
                         sigma_schedule,
                     )
-                    debug_save_image_from_latent(pred_x_0, f"target_pred_x0_{global_step}.png")
+                    debug_savings.append((pred_x_0.detach(), f"step_{global_step}/model--target_pred_x0.png"))
                     target = c_skip * x_prev + c_out * pred_x_0
+                    debug_savings.append((target.detach(), f"step_{global_step}/model--target.png"))
 
                 # 10. Calculate loss
                 if args.train.loss_type == "l2":
@@ -1117,11 +1128,13 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                 # 11. Backpropagate on the online student model (`transformer`)
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
+                    for tensor, filename in debug_savings:
+                        debug_save_image_from_latent(tensor, filename)
+                    debug_savings.clear()
                     accelerator.clip_grad_norm_(transformer.parameters(), args.train.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
-            import pdb; pdb.set_trace()
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
                 progress_bar.update(1)
