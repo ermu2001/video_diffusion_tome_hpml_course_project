@@ -82,7 +82,7 @@ check_min_version("0.32.0.dev0")
 logger = get_logger(__name__)
 
 def _debug_save_image_from_latent(latents, filename, pipe=None):
-    latents = (latents[[0]].detach().to(dtype=pipe.dtype) / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
+    latents = (latents[[0]].detach().to(dtype=pipe.vae.dtype) / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
     image = pipe.vae.decode(latents, return_dict=False)[0]
     image = pipe.image_processor.postprocess(image, output_type='pil')[0]
     os.makedirs(os.path.dirname(filename), exist_ok=True)
@@ -296,10 +296,10 @@ def log_validation(vae, transformer, args, accelerator, weight_dtype, step):
         with autocast_ctx:
             images = pipeline(
                 prompt=prompt,
-                num_inference_steps=4,
+                num_inference_steps=2,
                 num_images_per_prompt=4,
                 generator=generator,
-                guidance_scale=1.0,
+                guidance_scale=-1, # disable
             ).images
         image_logs.append({"validation_prompt": prompt, "images": images})
 
@@ -345,6 +345,7 @@ def append_dims(x, target_dims):
 
 # From LCMScheduler.get_scalings_for_boundary_condition_discrete
 def scalings_for_boundary_conditions(timestep, sigma_data=0.5, timestep_scaling=10.0):
+    # TODO: LCM theory, don't know why, figure out, P1
     scaled_timestep = timestep_scaling * timestep
     c_skip = sigma_data**2 / (scaled_timestep**2 + sigma_data**2)
     c_out = scaled_timestep / (scaled_timestep**2 + sigma_data**2) ** 0.5
@@ -372,9 +373,11 @@ def scalings_for_boundary_conditions(timestep, sigma_data=0.5, timestep_scaling=
 
 # Compare LCMScheduler.step, Step 4
 # for flow match
-def get_predicted_original_sample_flow_match(model_output, timesteps, sample, prediction_type, sigmas):
+def get_predicted_original_sample_flow_match(model_output, sample, prediction_type, sigmas):
+    # TODO: adapt this to flow match, only using sigma input is enough
     # alphas = extract_into_tensor(alphas, timesteps, sample.shape)
-    sigmas = extract_into_tensor(sigmas, timesteps.clip(0, len(sigmas)-1).to(dtype=torch.int64), sample.shape)
+    # sigmas = extract_into_tensor(sigmas, timesteps.clip(0, len(sigmas)-1).to(dtype=torch.int64), sample.shape)
+    assert sigmas.shape[0] == model_output.shape[0] and sigmas.ndim == model_output.ndim
     if prediction_type == "epsilon":
         pred_x_0 = (sample - sigmas * model_output)
     elif prediction_type == "sample":
@@ -410,8 +413,10 @@ def get_predicted_original_sample_flow_match(model_output, timesteps, sample, pr
 
 
 # Based on step 4 in DDIMScheduler.step
-def get_predicted_noise_flow_match(model_output, timesteps, sample, prediction_type, sigmas):
-    sigmas = extract_into_tensor(sigmas, timesteps.clip(0, len(sigmas)-1).to(dtype=torch.int64), sample.shape)
+def get_predicted_noise_flow_match(model_output, sample, prediction_type, sigmas):
+    # TODO: adapt this to flow match, only using sigma input is enough
+    # sigmas = extract_into_tensor(sigmas, timesteps.clip(0, len(sigmas)-1).to(dtype=torch.int64), sample.shape)
+    assert sigmas.shape[0] == model_output.shape[0] and sigmas.ndim == model_output.ndim
     if prediction_type == "epsilon":
         pred_epsilon = model_output
     elif prediction_type == "sample":
@@ -551,11 +556,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
 
     # # flow match implementation
     # alpha_schedule = torch.sqrt(noise_scheduler_flow_match.alphas_cumprod)
-    noise_scheduler = copy.deepcopy(noise_scheduler_flow_match)
-    sigma_schedule = noise_scheduler.sigmas.to(accelerator.device)
-    
-    noise_scheduler_flow_match.set_timesteps(args.train.num_ddim_timesteps)
-    backward_sigmas_schedule = noise_scheduler_flow_match.sigmas.to(accelerator.device)
+    # noise_scheduler = copy.deepcopy(noise_scheduler_flow_match)
 
     # 2. Load tokenizers from SD 3.5 checkpoint.
     tokenizer = AutoTokenizer.from_pretrained(
@@ -665,8 +666,6 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
     # sigma_schedule = sigma_schedule.to(accelerator.device)
     # Move the ODE solver to accelerator.device.
     # solver = solver.to(accelerator.device) # disable this for flow match
-    solver_timesteps = torch.from_numpy(noise_scheduler_flow_match.timesteps.numpy()).to(accelerator.device)
-    # topk_by_timestep = 
     # 10. Handle saving and loading of checkpoints
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
@@ -695,7 +694,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
 
-    # 11. Enable optimizations
+    # 11. Enable optimizations, TODO: bug enabling this, might improve efficiency; low priority
     if args.train.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
             import xformers
@@ -742,18 +741,20 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
     )
 
     # this pipe is used for enabling some functions
-    pipe = StableDiffusion3Pipeline.from_pretrained(
-        args.model.pretrained_teacher_model,
-        vae=vae,
-        text_encoder=text_encoder,
-        tokenizer=tokenizer,
-        text_encoder_2=text_encoder_2,
-        tokenizer_2=tokenizer_2,
-        # disable t5        
-        text_encoder_3=None,
-        tokenizer_3=None,
-    )
-    debug_save_image_from_latent = functools.partial(_debug_save_image_from_latent, pipe=pipe)
+    if accelerator.is_main_process:
+        pipe = StableDiffusion3Pipeline.from_pretrained(
+            args.model.pretrained_student_model,
+            transformer=transformer,
+            vae=vae,
+            text_encoder=text_encoder,
+            tokenizer=tokenizer,
+            text_encoder_2=text_encoder_2,
+            tokenizer_2=tokenizer_2,
+            # disable t5        
+            text_encoder_3=None,
+            tokenizer_3=None,
+        )
+        debug_save_image_from_latent = functools.partial(_debug_save_image_from_latent, pipe=pipe)
     # 13. Dataset creation and data processing
     # Here, we compute not just the text embeddings but also the additional embeddings
     # needed for the SD 3.5 transformer to operate.
@@ -835,7 +836,11 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
         tracker_config = dict(args)
-        accelerator.init_trackers(args.status.tracker_project_name, config=tracker_config)
+        init_kwargs = {
+            "wandb": {"entity": "ermuzzz2001"},
+        }
+        accelerator.init_trackers(args.status.tracker_project_name, config=tracker_config,
+                                  init_kwargs=init_kwargs)
 
     uncond_encoded_text = compute_embeddings([""] * args.train.per_device_train_batch_size, 0, is_train=False)
     uncond_prompt_embeds = uncond_encoded_text.pop("prompt_embeds")
@@ -894,8 +899,18 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
         disable=not accelerator.is_local_main_process,
     )
     debug_savings: List[Tuple] = []
+
+    # START TRAINING!
+    noise_scheduler_flow_match.set_timesteps(args.train.num_ddim_timesteps)
+    solver_denoise_sigmas_schedule = noise_scheduler_flow_match.sigmas.clone().to(accelerator.device)
+
     for epoch in range(first_epoch, args.train.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
+            if step % 100 == 0:
+                noise_scheduler_flow_match.set_timesteps(random.randint(10, args.train.num_ddim_timesteps))
+                # backward_sigmas_schedule = noise_scheduler_flow_match.sigmas.to(accelerator.device)
+                solver_denoise_sigmas_schedule = noise_scheduler_flow_match.sigmas.clone().to(accelerator.device)
+
             with accelerator.accumulate(transformer):
                 # 1. Load and process the image and text conditioning
                 image, text = batch
@@ -921,17 +936,22 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                 # For the DDIM solver, the timestep schedule is [T - 1, T - k - 1, T - 2 * k - 1, ...]
                 # topk = noise_scheduler.config.num_train_timesteps // args.train.num_ddim_timesteps # disable this for flow match
                 # flow match's topk is not static for each step
-                # topk = ... # TODO: implement this
-
                 # index = torch.randint(0, args.train.num_ddim_timesteps, (bsz,), device=latents.device).long() # disable this for flow match
-                index = torch.randint(0, args.train.num_ddim_timesteps, (bsz,), device=latents.device).long()
+                index = torch.randint(0, len(solver_denoise_sigmas_schedule) - 1, (bsz,), device=latents.device).long() # don't train the last one
                 # start_timesteps = solver.ddim_timesteps[index] # disable this for flow match
-                start_timesteps = solver_timesteps[index]
-                topk = start_timesteps - solver_timesteps.gather(0, torch.clip(index + 1, 0, len(solver_timesteps)-1))
-
-                timesteps = start_timesteps - topk
-                timesteps = torch.where(timesteps < 0, torch.zeros_like(timesteps), timesteps)
+                
+                start_sigmas = solver_denoise_sigmas_schedule[index]
+                start_timesteps = torch.floor(start_sigmas * noise_scheduler_flow_match.config.num_train_timesteps).long()
+                start_sigmas = start_sigmas.reshape(-1, 1, 1, 1)
+                sigmas = solver_denoise_sigmas_schedule[index + 1]
+                timesteps = torch.floor(sigmas * noise_scheduler_flow_match.config.num_train_timesteps).long() # TODO: consider this
+                sigmas = sigmas.reshape(-1, 1, 1, 1)
+                # start_timesteps = solver_timesteps[index]
+                # topk = start_timesteps - solver_timesteps.gather(0, torch.clip(index + 1, 0, len(solver_timesteps)-1))
+                # timesteps = start_timesteps - topk
+                # timesteps = torch.where(timesteps < 0, torch.zeros_like(timesteps), timesteps)
                 # 3. Get boundary scalings for start_timesteps and (end) timesteps.
+                # TODO: what's this, this is LCM theory? P1
                 c_skip_start, c_out_start = scalings_for_boundary_conditions(
                     start_timesteps, timestep_scaling=args.train.timestep_scaling_factor
                 )
@@ -946,7 +966,8 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                 # TODO: switch to flow match scheduler distillation process
                 noise = torch.randn_like(latents)
                 # noisy_model_input = noise_scheduler.add_noise(latents, noise, start_timesteps) # disable this for flow match
-                noisy_model_input = noise_scheduler_flow_match.scale_noise(latents, start_timesteps, noise)
+                noisy_model_input = start_sigmas * noise + (1.0 - start_sigmas) * latents
+                debug_savings.append((latents.detach(), f"step_{global_step}/original_latents.png"))
 
                 # 5. Sample a random guidance scale w from U[w_min, w_max]
                 # Note that for LCM-LoRA distillation it is not necessary to use a guidance scale embedding
@@ -957,6 +978,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                 # 6. Prepare prompt embeds and transformer_added_conditions
                 prompt_embeds = encoded_text.pop("prompt_embeds")
                 pooled_projections = encoded_text.pop("pooled_prompt_embeds")
+                debug_savings.append((noisy_model_input.detach(), f"step_{global_step}/noisy_model_input.png"))
 
                 # 7. Get online LCM prediction on z_{t_{n + k}} (noisy_model_input), w, c, t_{n + k} (start_timesteps)
                 noise_pred = transformer(
@@ -974,14 +996,13 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                 #     alpha_schedule,
                 #     sigma_schedule,
                 # )
-
                 pred_x_0 = get_predicted_original_sample_flow_match(
                     noise_pred,
-                    start_timesteps,
                     noisy_model_input,
                     prediction_type,
-                    sigma_schedule,
+                    start_sigmas,
                 )
+                # TODO: LCM theory, don't know why, figure out, P1
                 model_pred = c_skip_start * noisy_model_input + c_out_start * pred_x_0
                 debug_savings.append((pred_x_0.detach(), f"step_{global_step}/model--pred_x_0.png"))
                 debug_savings.append((model_pred.detach(), f"step_{global_step}/model--model_pred_consistency.png"))
@@ -1009,10 +1030,9 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                         # )
                         cond_pred_x0 = get_predicted_original_sample_flow_match(
                             cond_teacher_output,
-                            start_timesteps,
                             noisy_model_input,
                             prediction_type,
-                            sigma_schedule,
+                            start_sigmas,
                         )
                         # cond_pred_noise = get_predicted_noise(
                         #     cond_teacher_output,
@@ -1024,10 +1044,9 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                         # )
                         cond_pred_noise = get_predicted_noise_flow_match(
                             cond_teacher_output,
-                            start_timesteps,
                             noisy_model_input,
                             prediction_type,
-                            sigma_schedule,
+                            start_sigmas,
                         )
 
                         # 2. Get teacher model prediction on noisy_model_input z_{t_{n + k}} and unconditional embedding 0
@@ -1047,10 +1066,9 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                         # )
                         uncond_pred_x0 = get_predicted_original_sample_flow_match(
                             uncond_teacher_output,
-                            start_timesteps,
                             noisy_model_input,
                             prediction_type,
-                            sigma_schedule,
+                            start_sigmas,
                         )
                         # uncond_pred_noise = get_predicted_noise(
                         #     uncond_teacher_output,
@@ -1062,10 +1080,9 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                         # )
                         uncond_pred_noise = get_predicted_noise_flow_match(
                             uncond_teacher_output,
-                            start_timesteps,
                             noisy_model_input,
                             prediction_type,
-                            sigma_schedule,
+                            start_sigmas,
                         )
 
                         # 3. Calculate the CFG estimate of x_0 (pred_x0) and eps_0 (pred_noise)
@@ -1082,16 +1099,14 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                         # Note that the DDIM step depends on both the predicted x_0 and source noise eps_0.
                         # x_prev = solver.ddim_step(pred_x0, pred_noise, index) # disabled, using scheduler to ensure coherence
                         
-                        # sigma_next = backward_sigmas_schedule[torch.clip(index + 1, 0, len(backward_sigmas_schedule) - 1)] # no need for this, took care by scheduler imple
-                        # sigma_next = backward_sigmas_schedule[index + 1].to(pred_x0.device)
-                        sigma_next = extract_into_tensor(backward_sigmas_schedule, index + 1, pred_x0.shape).to(pred_x0.device) # this is safe since backward_sigmas_schedule is accounted for 1 more length
-                        x_prev = pred_x0 + sigma_next * pred_noise
-                        debug_savings.append((uncond_pred_x0.detach(), f"step_{global_step}/teacher--x_prev.png"))
+                        x_prev = pred_x0 + sigmas * pred_noise
+                        debug_savings.append((x_prev.detach(), f"step_{global_step}/teacher--x_prev.png"))
 
                 # 9. Get target LCM prediction on x_prev, w, c, t_n (timesteps)
                 # Note that we do not use a separate target network for LCM-LoRA distillation.
                 with torch.no_grad():
                     with autocast_ctx:
+                        # TODO: check here whether timesteps fit to the flow match scheduler sigmas
                         target_noise_pred = transformer( # TODO:consider using teacher_transformer
                             hidden_states=x_prev.float(),
                             timestep=timesteps,
@@ -1099,21 +1114,22 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                             encoder_hidden_states=prompt_embeds.float(),
                         ).sample
                     # pred_x_0 = get_predicted_original_sample(
-                    #     target_noise_pred,
+                    #     target_noise_pred,clear
                     #     timesteps,
                     #     x_prev,
                     #     noise_scheduler.config.prediction_type,
                     #     alpha_schedule,
                     #     sigma_schedule,
                     # )
+
                     pred_x_0 = get_predicted_original_sample_flow_match(
                         target_noise_pred,
-                        timesteps,
                         x_prev,
                         prediction_type,
-                        sigma_schedule,
+                        sigmas,
                     )
-                    debug_savings.append((pred_x_0.detach(), f"step_{global_step}/model--target_pred_x0.png"))
+                    debug_savings.append((pred_x_0.detach(), f"step_{global_step}/model--target_pred_x0.png")) # TODO: this target pred x0 is abnormal
+                    # TODO: LCM theory, don't know why, figure out, P1
                     target = c_skip * x_prev + c_out * pred_x_0
                     debug_savings.append((target.detach(), f"step_{global_step}/model--target.png"))
 
@@ -1128,9 +1144,6 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                 # 11. Backpropagate on the online student model (`transformer`)
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    for tensor, filename in debug_savings:
-                        debug_save_image_from_latent(tensor, filename)
-                    debug_savings.clear()
                     accelerator.clip_grad_norm_(transformer.parameters(), args.train.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
@@ -1168,9 +1181,13 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
 
                     if global_step % args.train.validation_steps == 0:
                         log_validation(vae, transformer, args, accelerator, weight_dtype, global_step)
-                    
+                        if accelerator.is_main_process:
+                            for tensor, filename in debug_savings:
+                                debug_save_image_from_latent(tensor, filename)
+                                
                     free_memory()
 
+            debug_savings.clear()
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
