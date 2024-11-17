@@ -71,6 +71,8 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 from accediff import LOCAL_PATH
 
+from accediff.utils.utils import recursive_dictconfig_to_dict
+
 MAX_SEQ_LENGTH = 77
 
 if is_wandb_available():
@@ -247,7 +249,7 @@ class SDText2ImageDataset:
         return self._train_dataloader
 
 
-def log_validation(vae, transformer, args, accelerator, weight_dtype, step):
+def log_validation(transformer, args, accelerator, weight_dtype, step, pipeline_modules={}):
     # TODO: current validation only supported lora training
     logger.info("Running validation... ")
     if torch.backends.mps.is_available():
@@ -259,13 +261,13 @@ def log_validation(vae, transformer, args, accelerator, weight_dtype, step):
     # allows for disabling a large text encoder t5.
     pipeline = StableDiffusion3Pipeline.from_pretrained(
         args.model.pretrained_teacher_model,
-        vae=vae,
         text_encoder_3=None,
         tokenizer_3=None,
         # scheduler=LCMScheduler.from_pretrained(args.model.pretrained_teacher_model, subfolder="scheduler"),
         revision=args.model.revision,
         torch_dtype=weight_dtype,
         safety_checker=None,
+        **pipeline_modules,
     )
     pipeline.set_progress_bar_config(disable=True)
 
@@ -835,7 +837,7 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
-        tracker_config = dict(args)
+        tracker_config = recursive_dictconfig_to_dict(args)
         init_kwargs = {
             "wandb": {"entity": "ermuzzz2001"},
         }
@@ -1180,10 +1182,17 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
                         logger.info(f"Saved state to {save_path}")
 
                     if global_step % args.train.validation_steps == 0:
-                        log_validation(vae, transformer, args, accelerator, weight_dtype, global_step)
-                        if accelerator.is_main_process:
-                            for tensor, filename in debug_savings:
-                                debug_save_image_from_latent(tensor, filename)
+                        log_validation(transformer, args, accelerator, weight_dtype, global_step,
+                                       pipeline_modules={
+                                            "vae": vae,
+                                            "text_encoder": text_encoder,
+                                            "text_encoder_2": text_encoder_2,
+                                            "tokenizer": tokenizer,
+                                            "tokenizer_2": tokenizer_2,
+                                       })
+                        
+                        for tensor, filename in debug_savings:
+                            debug_save_image_from_latent(tensor, filename)
                                 
                     free_memory()
 
