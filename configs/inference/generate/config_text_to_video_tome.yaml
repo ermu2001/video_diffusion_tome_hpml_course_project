@@ -1,0 +1,11 @@
+defaults:
+  - generate_kwargs: v1
+  - prompt_sources: v1
+  - get_pipeline: get_covvideox_pipeline_tome
+
+
+generate_kwargs:
+  num_frames: 49
+
+num_videos: 100
+output_dir: tmp/generated_videos_tome

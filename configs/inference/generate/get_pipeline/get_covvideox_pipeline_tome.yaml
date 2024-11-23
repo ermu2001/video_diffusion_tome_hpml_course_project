@@ -1,0 +1,5 @@
+_target_: accediff.utils.factory.pipeline_factory.get_cogvideox_pipeline_with_tome
+repo_id: "THUDM/CogVideoX-2b"
+tome_modele_names:
+  - ff
+  - attn1
