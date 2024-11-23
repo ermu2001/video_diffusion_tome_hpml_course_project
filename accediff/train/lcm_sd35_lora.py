@@ -249,6 +249,7 @@ class SDText2ImageDataset:
         return self._train_dataloader
 
 
+@torch.no_grad()
 def log_validation(transformer, args, accelerator, weight_dtype, step, pipeline_modules={}):
     # TODO: current validation only supported lora training
     logger.info("Running validation... ")
@@ -261,6 +262,7 @@ def log_validation(transformer, args, accelerator, weight_dtype, step, pipeline_
     # allows for disabling a large text encoder t5.
     pipeline = StableDiffusion3Pipeline.from_pretrained(
         args.model.pretrained_teacher_model,
+        transformer=transformer,
         text_encoder_3=None,
         tokenizer_3=None,
         # scheduler=LCMScheduler.from_pretrained(args.model.pretrained_teacher_model, subfolder="scheduler"),
@@ -626,9 +628,11 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
     else:
         lora_target_modules = [
             # TODO: update this base on the transformer arch
+            "proj",
             "to_q",
             "to_k",
             "to_v",
+            "ff.2",
             "proj_out",
             "context_embedder",
             "time_emb_proj",
@@ -640,6 +644,8 @@ def train(args: DictConfig, accelerator: Accelerator) -> None:
         lora_dropout=args.train.lora_dropout,
     )
     transformer = get_peft_model(transformer, lora_config)
+    logger.info("Printing trainable parameters of the transformer:")
+    transformer.print_trainable_parameters()
 
     # 9. Handle mixed precision and device placement
     # For mixed precision training we cast all non-trainable weigths to half-precision

@@ -52,7 +52,28 @@ def get_sd3_quantized_pipeline(repo_id="stabilityai/stable-diffusion-3-medium-di
     return pipe
 
 def get_sd3_pipeline(repo_id="stabilityai/stable-diffusion-3-medium-diffusers"):
-    return StableDiffusion3Pipeline.from_pretrained(repo_id, torch_dtype=torch.float16)
+    pipe = StableDiffusion3Pipeline.from_pretrained(repo_id, torch_dtype=torch.float16).to('cuda')
+    pipe.set_progress_bar_config(disable=True)
+    return pipe
+
+
+
+def get_sd3_pipeline_with_lora(
+    repo_id="stabilityai/stable-diffusion-3.5-medium",
+    lora_weight_dir=None,
+):
+    pipe = StableDiffusion3Pipeline.from_pretrained(repo_id, torch_dtype=torch.float16)
+    # lora_weight_path = osp.join(lora_weight_dir, 'trnasformer_lora', 'pytorch_lora_weights.safetensors')
+    pipe.load_lora_weights(
+        lora_weight_dir,
+        weight_name="converted_pytorch_lora_weights.safetensors", 
+        adapter_name="default",
+    )
+
+    pipe.fuse_lora()
+    pipe = pipe.to("cuda")
+    pipe.set_progress_bar_config(disable=True)
+    return pipe
 
 if __name__ == "__main__":
     # repo_id = "stabilityai/stable-diffusion-3-medium-diffusers"

@@ -1,0 +1,8 @@
+defaults:
+  - generate_kwargs: short
+  - prompt_sources: v1
+  - get_pipeline: get_sd35_lora_pipeline
+
+
+num_images: 100
+output_dir: tmp/generated_images_validate

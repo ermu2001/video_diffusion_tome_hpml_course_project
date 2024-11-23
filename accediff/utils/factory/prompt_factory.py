@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def iter_prompts_from_txt_file(file):
-    with open(file, "r") as f:
+    with open(file, "r", encoding="utf-8") as f:
         for line in f:
             yield line.strip()
     

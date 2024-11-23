@@ -1,3 +1,3 @@
 _target_: accediff.utils.factory.pipeline_factory.get_sd3_quantized_pipeline
-repo_id: "stabilityai/stable-diffusion-3.5-large"
-drop_text_encoder_3: True
+repo_id: "stabilityai/stable-diffusion-3.5-medium"
+drop_text_encoder_3: False
