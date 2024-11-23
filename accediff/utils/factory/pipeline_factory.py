@@ -1,6 +1,8 @@
 import functools
+import itertools
 import math
 from typing import List, Tuple
+from braceexpand import braceexpand
 import torch
 from diffusers import StableDiffusion3Pipeline
 from diffusers import CogVideoXPipeline
@@ -100,15 +102,20 @@ def find_modules_with_ending_pattern(model, patterns: List[str]):
         list: A list of tuples (name, module) matching the pattern.
     """
     matching_modules = []
-    
+    patterns = list(itertools.chain.from_iterable(braceexpand(pattern) for pattern in patterns))
+
     for name, module in model.named_modules():
-        if any(name.endswith(pattern) for pattern in patterns):
+        in_pattern = [name.endswith(pattern) for pattern in patterns]
+        if any(in_pattern):
             matching_modules.append((name, module))
     
     return matching_modules
 
 def _wrap_token_merging(model: nn.Module, tome_modele_names=None, pre_forward_hook=None, post_forward_hook=None):
-    for module_name, module in find_modules_with_ending_pattern(model, tome_modele_names):
+    register_list = find_modules_with_ending_pattern(model, tome_modele_names)
+    if len(register_list) == 0:
+        raise ValueError(f"No modules found with names ending with {tome_modele_names}")
+    for module_name, module in register_list:
         if pre_forward_hook is not None:
             logger.info(f"Wrapping {module_name} with pre forward hook {post_forward_hook}")
             module.register_forward_pre_hook(pre_forward_hook, with_kwargs=True)
@@ -132,13 +139,14 @@ def create_3d_gaussian_kernel(kernel_size=(1, 3, 3), sigma=1.0):
 
     return gaussian
 
-def _get_cogvideox_naive_gaussian_token_merging_hooks(pipe, token_merging_shape):
-    frames_token_size = (13, pipe.transformer.config.sample_height // pipe.transformer.config.patch_size, pipe.transformer.config.sample_width // pipe.transformer.config.patch_size) # cogvideox has 13 frames
+def _get_cogvideox_naive_gaussian_token_merging_hooks(pipe):
+    token_merging_shape = (3, 1, 1) # (temporal, height, width)
+    frames_token_size = (9, pipe.transformer.config.sample_height // pipe.transformer.config.patch_size, pipe.transformer.config.sample_width // pipe.transformer.config.patch_size) # cogvideox has 13 frames
     frames_token_size_after_merging = (frames_token_size[0] // token_merging_shape[0], frames_token_size[1] // token_merging_shape[1], frames_token_size[2] // token_merging_shape[2])
     num_vision_tokens = math.prod(frames_token_size)
     num_vision_tokens_after_merging = math.prod(frames_token_size_after_merging)
     # use 3d gaussian kernel to merge tokens
-    downsample_weight = create_3d_gaussian_kernel(kernel_size=token_merging_shape, sigma=1.0).reshape(1, 1, *token_merging_shape).to(pipe.transformer.device)
+    downsample_weight = create_3d_gaussian_kernel(kernel_size=token_merging_shape, sigma=1.0).reshape(1, 1, *token_merging_shape).to(pipe.transformer.device, dtype=pipe.transformer.dtype)
     def tome_pre_forward_hook(module, args, kwargs):
         # naive token merging
         if "hidden_states" in kwargs:
@@ -157,7 +165,7 @@ def _get_cogvideox_naive_gaussian_token_merging_hooks(pipe, token_merging_shape)
         assert hidden_states.shape[1] == num_vision_tokens
         hidden_states = hidden_states.view(bsz, frames_token_size[0], frames_token_size[1], frames_token_size[2], dim).permute(0, 4, 1, 2, 3).contiguous()
         # get gaussian kernel
-        hidden_states = nn.functional.conv3d(hidden_states, downsample_weight, stride=token_merging_shape,)
+        hidden_states = nn.functional.conv3d(hidden_states, downsample_weight.repeat(dim, 1, 1, 1, 1), stride=token_merging_shape, groups=dim)
         hidden_states = hidden_states.view(bsz, dim, -1).permute(0, 2, 1).contiguous()
         assert hidden_states.shape[1] == num_vision_tokens_after_merging
 
@@ -192,14 +200,13 @@ def _get_cogvideox_naive_gaussian_token_merging_hooks(pipe, token_merging_shape)
     return tome_pre_forward_hook, tome_post_forward_hook
 
 def get_cogvideox_pipeline_with_tome(repo_id="THUDM/CogVideoX-5b", tome_modele_names: List[str]=None):
-    token_merging_shape = (1, 3, 3) # (temporal, height, width)
     
     if tome_modele_names is None:
         raise ValueError("tome_model_names must be provided")
         
     pipe = get_cogvideox_pipeline(repo_id)
 
-    pre_forward_hook, post_forward_hook = _get_cogvideox_naive_gaussian_token_merging_hooks(pipe, token_merging_shape)
+    pre_forward_hook, post_forward_hook = _get_cogvideox_naive_gaussian_token_merging_hooks(pipe)
     _wrap_token_merging(pipe.transformer, tome_modele_names, pre_forward_hook, post_forward_hook)    
     return pipe
 

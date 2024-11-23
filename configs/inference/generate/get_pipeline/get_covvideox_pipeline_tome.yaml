@@ -1,5 +1,11 @@
 _target_: accediff.utils.factory.pipeline_factory.get_cogvideox_pipeline_with_tome
 repo_id: "THUDM/CogVideoX-2b"
-tome_modele_names:
-  - ff
-  - attn1
+tome_modele_names:  
+  - transformer_blocks.{0..10}.attn1
+  - transformer_blocks.{20..27}.attn1
+  - transformer_blocks.{0..10}.ff
+  - transformer_blocks.{20..27}.ff
+  # - transformer_blocks.{10..20}.attn1
+  # - transformer_blocks.{10..20}.ff
+  # - attn1
+  # - ff
