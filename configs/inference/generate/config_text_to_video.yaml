@@ -7,5 +7,5 @@ defaults:
 generate_kwargs:
   num_frames: 33
 
-num_videos: 100
+num_videos: 10
 output_dir: tmp/generated_videos

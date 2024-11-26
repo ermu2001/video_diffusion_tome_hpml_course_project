@@ -1,8 +1,19 @@
 _target_: accediff.utils.factory.pipeline_factory.get_cogvideox_pipeline_with_tome
 repo_id: "THUDM/CogVideoX-2b"
-tome_modele_names:  
-  - attn1
-  - ff
+tome_modele_names:
+
+
+  # this slighly improves the output quality
+  - transformer_blocks.{0..10}.attn1
+  - transformer_blocks.{17..27}.attn1
+
+  # # this is slighly improves the output quality
+  # - transformer_blocks.{0..8}.attn1
+  # - transformer_blocks.{20..27}.attn1
+
+  # - transformer_blocks.{4..24}.attn1 # not working
+  # - attn1
+  # - ff # don't do this, this caused low quality high cost
   # - transformer_blocks.{0..10}.attn1
   # - transformer_blocks.{20..27}.attn1
   # - transformer_blocks.{0..10}.ff
