@@ -3,6 +3,7 @@ import random
 from typing import List, Tuple, Union
 import json
 import itertools
+import warnings
 from braceexpand import braceexpand
 import math
 import os.path as osp
@@ -201,7 +202,7 @@ class MidjourneyText2ImageDataset:
                             "text": sample["prompt"],
                         }
                     except Exception as e:
-                        raise ValueError(f"Error loading sample from JSONL file: {e}")
+                        warnings.warn(f"Error loading sample from JSONL file: {e}")
 
     def __init__(
         self,
