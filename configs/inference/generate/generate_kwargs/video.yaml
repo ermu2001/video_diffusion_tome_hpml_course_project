@@ -1,0 +1,4 @@
+negative_prompt: ""
+num_inference_steps: 50
+guidance_scale: 6
+num_frames: 45

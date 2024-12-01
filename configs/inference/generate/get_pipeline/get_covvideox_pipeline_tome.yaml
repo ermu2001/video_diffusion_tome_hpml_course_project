@@ -3,13 +3,21 @@ repo_id: "THUDM/CogVideoX-2b"
 tome_modele_names:
 
 
-  # this slighly improves the output quality
-  - transformer_blocks.{0..10}.attn1
-  - transformer_blocks.{17..27}.attn1
+  # # this slighly improves the output quality
+  # # tome all
+  # - transformer_blocks.{0..27}.attn1
+  
+  # tome 14 layers
+  - transformer_blocks.{0..27..2}.attn1 # destory the low frequency information
+  
+  # tome mid 20 layers
+  # - transformer_blocks.{0..10}.attn1
+  # - transformer_blocks.{17..27}.attn1
 
-  # # this is slighly improves the output quality
-  # - transformer_blocks.{0..8}.attn1
-  # - transformer_blocks.{20..27}.attn1
+  # tome 15 layers
+  # - transformer_blocks.{12..27}.attn1 # destory the high frequency information
+  # - transformer_blocks.{0..15}.attn1 # destory the low frequency information
+
 
   # - transformer_blocks.{4..24}.attn1 # not working
   # - attn1
