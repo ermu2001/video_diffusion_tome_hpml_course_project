@@ -25,7 +25,7 @@ def iter_generate_prompt2video(
 
 @hydra.main(version_base=None, config_path=f"{LOCAL_PATH}/configs/inference/generate", config_name="config_text_to_video")
 def main(cfg: DictConfig):
-    print(OmegaConf.to_yaml(cfg))
+    logger.info(str(OmegaConf.to_yaml(cfg)))
     main_generate(cfg)
 
 def main_generate(cfg: DictConfig):

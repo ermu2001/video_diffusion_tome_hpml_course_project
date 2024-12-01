@@ -8,6 +8,7 @@ from tqdm import tqdm
 from accediff import LOCAL_PATH
 from accediff.utils.factory.pipeline_factory import get_sd3_quantized_pipeline
 from accediff.utils.factory.prompt_factory import iter_prompts
+logger = logging.getLogger(__name__)
 
 def iter_generate_prompt2image(
     pipe,
@@ -19,7 +20,7 @@ def iter_generate_prompt2image(
 
 @hydra.main(version_base=None, config_path=f"{LOCAL_PATH}/configs/inference/generate", config_name="validate")
 def main(cfg: DictConfig):
-    print(OmegaConf.to_yaml(cfg))
+    logger.info(str(OmegaConf.to_yaml(cfg)))
     main_generate(cfg)
 
 def main_generate(cfg: DictConfig):

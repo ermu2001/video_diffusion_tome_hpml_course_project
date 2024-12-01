@@ -1,8 +1,33 @@
 defaults:
+  - _self_
   - generate_kwargs: v1
   - prompt_sources: v1
   - get_pipeline: get_sd35_pipeline
 
 
 num_images: 100
-output_dir: tmp/generated_images
+output_dir: outputs/${now:%Y-%m-%d_%H-%M-%S}/generated_images
+
+hydra:
+  run:
+    dir: ${output_dir}
+  job_logging:
+    version: 1
+    disable_existing_loggers: false
+    formatters:
+      simple:
+        format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    handlers:
+      console:
+        class: logging.StreamHandler
+        formatter: simple
+        level: INFO
+        stream: ext://sys.stdout
+      file:
+        class: logging.FileHandler
+        formatter: simple
+        level: DEBUG
+        filename: ${output_dir}/hydra_logs.log
+    root:
+      level: DEBUG
+      handlers: [file]

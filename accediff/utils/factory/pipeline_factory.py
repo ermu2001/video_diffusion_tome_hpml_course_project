@@ -12,7 +12,6 @@ import torch.nn as nn
 import logging
 logger = logging.getLogger(__name__)
 
-MERGE_RATIO=0.5
 
 def get_sd3_quantized_pipeline(repo_id="stabilityai/stable-diffusion-3-medium-diffusers", drop_text_encoder_3=True):
     logger.info(f"Loading model from {repo_id}")
@@ -175,7 +174,6 @@ def _get_cogvideox_naive_gaussian_token_merging_hooks(pipe):
         else:
             raise ValueError("No hidden states found")
         
-        # print("Before forward pass:", hidden_states.shape)
 
         bsz, seqlen, dim = hidden_states.shape
         # token merge on hidden states // video view
@@ -211,7 +209,6 @@ def _get_cogvideox_naive_gaussian_token_merging_hooks(pipe):
         hidden_states = hidden_states.view(bsz, dim, -1).permute(0, 2, 1).contiguous()
         assert hidden_states.shape[1] == num_vision_tokens
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
-        # print("After forward pass:", hidden_states.shape)
         if isinstance(output, torch.Tensor):
             return hidden_states
         elif isinstance(output, tuple):
@@ -485,7 +482,7 @@ def _get_cogvideox_naive_gaussian_token_merging_hooks(pipe):
 #     return tome_pre_forward_hook, tome_post_forward_hook
 
 
-def _get_cogvideox_tome_token_merging_hooks_3d(pipe):
+def _get_cogvideox_tome_token_merging_hooks_3d(pipe, merge_ratio, st, sx, sy):
     
     def bipartite_soft_matching_random3d(metric: torch.Tensor,
                                          f: int, w: int, h: int, st:int, sx: int, sy: int, r: int,
@@ -596,12 +593,12 @@ def _get_cogvideox_tome_token_merging_hooks_3d(pipe):
         return merge, unmerge
 
     # Print available config keys to identify the correct keys
-    print(f"Available config keys: {pipe.transformer.config.keys()}")
+    logger.info(f"Available config keys: {pipe.transformer.config.keys()}")
 
     # Use the correct key for the number of frames
     # Assuming 'num_frames' is the correct key; if not, adjust accordingly
     frames_token_size = (
-        pipe.transformer.config.get('num_frames', 12),  # Default to 9 if not found
+        pipe.transformer.config.get('num_frames', 12),  # Default to 12 if not found
         pipe.transformer.config['sample_height'] // pipe.transformer.config['patch_size'],
         pipe.transformer.config['sample_width'] // pipe.transformer.config['patch_size']
     )
@@ -609,24 +606,7 @@ def _get_cogvideox_tome_token_merging_hooks_3d(pipe):
 
     num_vision_tokens = frames * h * w
 
-    # Automatically find suitable sx and sy
-    def find_divisors(n):
-        return [i for i in range(1, n+1) if n % i == 0]
-
-    st_options = find_divisors(frames)
-    sx_options = find_divisors(w)
-    sy_options = find_divisors(h)
-
-    # Choose desired sx and sy or the largest possible
-    desired_st = 4
-    desired_sx = 6  # Adjust as needed
-    desired_sy = 9
-
-    # st = max([i for i in st_options if i <= desired_st], default=1)
-    # sx = max([i for i in sx_options if i <= desired_sx], default=1)
-    # sy = max([i for i in sy_options if i <= desired_sy], default=1)
-    st, sx, sy = desired_st, desired_sx, desired_sy
-    print(f"f: {frames}, h: {h}, w: {w}, st: {st}, sx: {sx}, sy: {sy}")
+    logger.info(f"f: {frames}, h: {h}, w: {w}, st: {st}, sx: {sx}, sy: {sy}")
 
     # Ensure st, sx and sy divide f, h and w, no need
     # assert frames % st == 0 and w % sx == 0 and h % sy == 0, f"st ({st}) must divide f ({frames}), sx ({sx}) must divide w ({w}) and sy ({sy}) must divide h ({h}) respectively."
@@ -638,7 +618,6 @@ def _get_cogvideox_tome_token_merging_hooks_3d(pipe):
     num_src = num_vision_tokens - num_dst
     
     # Set merge ratio (fraction of src tokens to merge)
-    merge_ratio = MERGE_RATIO  # Adjust the merge ratio as needed
     r = int(num_src * merge_ratio)
 
     # Generator for randomness
@@ -665,12 +644,7 @@ def _get_cogvideox_tome_token_merging_hooks_3d(pipe):
         encoder_hidden_states = hidden_states[:, :seqlen - num_vision_tokens, :]
         vision_hidden_states = hidden_states[:, seqlen - num_vision_tokens:, :]
 
-        # # Reshape vision_hidden_states to (B * frames, h * w, dim)
-        # vision_hidden_states = vision_hidden_states.reshape(bsz, frames, h * w, dim)
-        # vision_hidden_states = vision_hidden_states.reshape(bsz * frames, h * w, dim)
-
         # (B, N, C) == （B, f * h * w, C)
-
         # Call bipartite_soft_matching_random2d
         merge_fn, unmerge_fn = bipartite_soft_matching_random3d(
             metric=vision_hidden_states,
@@ -694,11 +668,6 @@ def _get_cogvideox_tome_token_merging_hooks_3d(pipe):
         # Store the number of tokens per frame after merging
         num_tokens_per_frame_after_merging = vision_hidden_states.shape[1]
         num_tokens_after_merging_per_frame[module_id] = num_tokens_per_frame_after_merging
-
-        # # Reshape back to (B, frames, num_tokens_per_frame_after_merging, dim)
-        # vision_hidden_states = vision_hidden_states.reshape(bsz, frames, num_tokens_per_frame_after_merging, dim)
-        # # Flatten frames and tokens
-        # vision_hidden_states = vision_hidden_states.reshape(bsz, frames * num_tokens_per_frame_after_merging, dim)
 
         # Update hidden_states
         hidden_states = torch.cat([encoder_hidden_states, vision_hidden_states], dim=1)
@@ -738,10 +707,6 @@ def _get_cogvideox_tome_token_merging_hooks_3d(pipe):
         encoder_hidden_states = hidden_states[:, :seqlen - num_vision_tokens_after_merging, :]
         vision_hidden_states = hidden_states[:, seqlen - num_vision_tokens_after_merging:, :]
 
-        # # Reshape vision_hidden_states to (B * frames, num_tokens_per_frame_after_merging, dim)
-        # vision_hidden_states = vision_hidden_states.reshape(bsz, frames, num_tokens_per_frame_after_merging, dim)
-        # vision_hidden_states = vision_hidden_states.reshape(bsz * frames, num_tokens_per_frame_after_merging, dim)
-
         # Apply unmerge function
         vision_hidden_states = unmerge_fn(vision_hidden_states)
 
@@ -780,7 +745,7 @@ def _debug_plot_histogram(t, prefix=''):
     fig.savefig(f"debug_out/{prefix}_histogram.png")
     plt.close(fig)  # Close the figure to free memory
 
-def _get_cogvideox_tome_token_merging_hooks_attnbin(pipe):
+def _get_cogvideox_tome_token_merging_hooks_attnbin(pipe, merge_ratio, sb):
     def bipartite_soft_matching_attnbin(metric: torch.Tensor,
                                         num_bins: int,
                                         sb: int,
@@ -908,32 +873,26 @@ def _get_cogvideox_tome_token_merging_hooks_attnbin(pipe):
         return merge, unmerge
 
     # Print available config keys to identify the correct keys
-    print(f"Available config keys: {pipe.transformer.config.keys()}")
+    logger.info(f"Available config keys: {pipe.transformer.config.keys()}")
 
     # Use the correct key for the number of frames
     # Assuming 'num_frames' is the correct key; if not, adjust accordingly
     frames_token_size = (
-        pipe.transformer.config.get('num_frames', 9),  # Default to 9 if not found
+        pipe.transformer.config.get('num_frames', 12),  # Default to 12 if not found
         pipe.transformer.config['sample_height'] // pipe.transformer.config['patch_size'],
         pipe.transformer.config['sample_width'] // pipe.transformer.config['patch_size']
     )
     frames, h, w = frames_token_size
 
     num_vision_tokens = frames * h * w
-    # Automatically find suitable sx and sy
-    def find_divisors(n):
-        return [i for i in range(1, n+1) if n % i == 0]
 
-    # num_bins = 400
-    # sb = num_vision_tokens // num_bins
-    sb = 600
+    # stride bin determines the shape for selecting the dst
     num_bins = num_vision_tokens // sb # num_vision_tokens ~ 12 * 30 * 45
     num_dst = num_bins
     num_src = num_vision_tokens - num_dst
-    print(f"f: {frames}, h: {h}, w: {w}, sb: {sb}")
+    logger.info(f"f: {frames}, h: {h}, w: {w}, sb: {sb}")
     
     # Set merge ratio (fraction of src tokens to merge)
-    merge_ratio = MERGE_RATIO  # Adjust the merge ratio as needed
     r = int(num_src * merge_ratio)
 
     # Generator for randomness
@@ -1066,7 +1025,15 @@ def _get_cogvideox_tome_token_merging_hooks_attn(pipe):
 
 
         with torch.no_grad():
-            rand_idx = torch.argsort(metric[0].norm(dim=-1), dim=0, descending=False) # from small to large sort
+            rand_idx = torch.argsort(metric[0].norm(dim=-1), dim=0, descending=False) # from small to large sort, use smallest norm tokens as dst
+            # rand_idx = torch.argsort(metric[0].norm(dim=-1), dim=0, descending=True) # from large to small sort, use largest norm tokens as dst
+            # rand_idx = torch.argsort(metric[0].norm(dim=-1), dim=0, descending=False)
+            # head_rand_idx = rand_idx[:num_bins * sb].reshape(num_bins, sb)
+            # head_rand_idx = head_rand_idx.permute(1, 0)
+            # rand_idx[:num_bins * sb] = head_rand_idx.reshape(-1) # switch to use every sb tokens as dst
+            rand_idx = rand_idx.reshape(2, -1)
+            rand_idx = rand_idx[[1, 0], :]
+
             rand_idx = rand_idx.reshape(1, -1, 1) # add a batch size dim and feature dim for broadcasting
 
             num_dst = num_bins
@@ -1120,7 +1087,7 @@ def _get_cogvideox_tome_token_merging_hooks_attn(pipe):
         return merge, unmerge
 
     # Print available config keys to identify the correct keys
-    print(f"Available config keys: {pipe.transformer.config.keys()}")
+    logger.info(f"Available config keys: {pipe.transformer.config.keys()}")
 
     # Use the correct key for the number of frames
     # Assuming 'num_frames' is the correct key; if not, adjust accordingly
@@ -1142,7 +1109,7 @@ def _get_cogvideox_tome_token_merging_hooks_attn(pipe):
     num_bins = num_vision_tokens // sb # num_vision_tokens ~ 12 * 30 * 45
     num_dst = num_bins
     num_src = num_vision_tokens - num_dst
-    print(f"f: {frames}, h: {h}, w: {w}, sb: {sb}")
+    logger.info(f"f: {frames}, h: {h}, w: {w}, sb: {sb}")
     
     # Set merge ratio (fraction of src tokens to merge)
     merge_ratio = MERGE_RATIO  # Adjust the merge ratio as needed
@@ -1249,14 +1216,29 @@ def _get_cogvideox_tome_token_merging_hooks_attn(pipe):
 
 
 
-def get_cogvideox_pipeline_with_tome(repo_id="THUDM/CogVideoX-5b", tome_modele_names: List[str]=None):
+def get_cogvideox_pipeline_with_tome_attnbin(repo_id="THUDM/CogVideoX-5b", tome_modele_names: List[str]=None, hook_kwargs={}):
     
     if tome_modele_names is None:
         raise ValueError("tome_model_names must be provided")
         
     pipe = get_cogvideox_pipeline(repo_id)
 
-    pre_forward_hook, post_forward_hook = _get_cogvideox_tome_token_merging_hooks_attn(pipe)
+    pre_forward_hook, post_forward_hook = _get_cogvideox_tome_token_merging_hooks_attnbin(pipe, **hook_kwargs)
+    # pre_forward_hook, post_forward_hook = _get_cogvideox_tome_token_merging_hooks_attn(pipe)
+    # pre_forward_hook, post_forward_hook = _get_cogvideox_tome_token_merging_hooks_3d(pipe)
+    _wrap_token_merging(pipe.transformer, tome_modele_names, pre_forward_hook, post_forward_hook)    
+    return pipe
+
+
+
+def get_cogvideox_pipeline_with_tome_3d(repo_id="THUDM/CogVideoX-5b", tome_modele_names: List[str]=None, hook_kwargs={}):
+    if tome_modele_names is None:
+        raise ValueError("tome_model_names must be provided")
+        
+    pipe = get_cogvideox_pipeline(repo_id)
+
+    pre_forward_hook, post_forward_hook = _get_cogvideox_tome_token_merging_hooks_3d(pipe, **hook_kwargs)
+    # pre_forward_hook, post_forward_hook = _get_cogvideox_tome_token_merging_hooks_attn(pipe)
     # pre_forward_hook, post_forward_hook = _get_cogvideox_tome_token_merging_hooks_3d(pipe)
     _wrap_token_merging(pipe.transformer, tome_modele_names, pre_forward_hook, post_forward_hook)    
     return pipe

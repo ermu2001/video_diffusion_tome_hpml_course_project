@@ -10,7 +10,7 @@ from accediff import LOCAL_PATH
 from accediff.utils.factory.pipeline_factory import get_sd3_quantized_pipeline
 from accediff.utils.factory.prompt_factory import iter_prompts
 from accediff.utils.utils import benchmark_time_iterator
-
+logger = logging.getLogger(__name__)
 
 @benchmark_time_iterator(num_warmup=3)
 def iter_generate_prompt2image(
@@ -23,7 +23,7 @@ def iter_generate_prompt2image(
 
 @hydra.main(version_base=None, config_path=f"{LOCAL_PATH}/configs/inference/generate", config_name="config")
 def main(cfg: DictConfig):
-    print(OmegaConf.to_yaml(cfg))
+    logger.info(str(OmegaConf.to_yaml(cfg)))
     main_generate(cfg)
 
 def main_generate(cfg: DictConfig):
