@@ -1,16 +1,7 @@
-defaults:
-  - _self_
-  - generate_kwargs: v1
-  - prompt_sources: v1
-  - get_pipeline: get_sd35_pipeline
-
-
-num_images: 100
-output_dir: outputs/${now:%Y-%m-%d_%H-%M-%S}/benchmark_image_generation
-
+generation_output_dir: ...
 hydra:
   run:
-    dir: ${output_dir}
+    dir: ${generation_output_dir}
   job_logging:
     version: 1
     disable_existing_loggers: false
@@ -27,8 +18,7 @@ hydra:
         class: logging.FileHandler
         formatter: simple
         level: DEBUG
-        filename: ${output_dir}/text_to_image_generation.log
+        filename: ${generation_output_dir}/image_clip_score_evaluation.log
     root:
       level: DEBUG
       handlers: [file, console]
-

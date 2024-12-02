@@ -26,7 +26,7 @@ hydra:
         class: logging.FileHandler
         formatter: simple
         level: DEBUG
-        filename: ${output_dir}/hydra_logs.log
+        filename: ${output_dir}/text_to_video_generation.log
     root:
       level: DEBUG
-      handlers: [file]
+      handlers: [file, console]

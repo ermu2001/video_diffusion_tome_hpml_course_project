@@ -4,3 +4,5 @@ outputs/
 **__pycache__/
 slurm_logs/
 debug_out/
+MODELS/
+RESULTS/

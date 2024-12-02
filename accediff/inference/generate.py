@@ -7,21 +7,21 @@ from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 import os.path as osp
 from accediff import LOCAL_PATH
-from accediff.utils.factory.pipeline_factory import get_sd3_quantized_pipeline
 from accediff.utils.factory.prompt_factory import iter_prompts
 from accediff.utils.utils import benchmark_time_iterator
 logger = logging.getLogger(__name__)
 
-@benchmark_time_iterator(num_warmup=3)
+@benchmark_time_iterator(num_warmup=3, logger=logger)
 def iter_generate_prompt2image(
     pipe,
     prompt_sources,
+    num_total,
     diffusion_kwargs,
 ):
-    for prompt in iter_prompts(prompt_sources):
+    for prompt in itertools.islice(iter_prompts(prompt_sources), num_total):
         yield pipe(prompt, **diffusion_kwargs).images[0], prompt
 
-@hydra.main(version_base=None, config_path=f"{LOCAL_PATH}/configs/inference/generate", config_name="config")
+@hydra.main(version_base=None, config_path=f"{LOCAL_PATH}/configs/inference/generate", config_name="config_text_to_image")
 def main(cfg: DictConfig):
     logger.info(str(OmegaConf.to_yaml(cfg)))
     main_generate(cfg)
@@ -33,9 +33,9 @@ def main_generate(cfg: DictConfig):
     generated_image_iterator = iter_generate_prompt2image(
         pipe,
         cfg.prompt_sources,
+        cfg.num_images,
         cfg.generate_kwargs,
     )
-    generated_image_iterator = itertools.islice(generated_image_iterator, cfg.num_images)
     images_progress_bar = tqdm(generated_image_iterator, total=cfg.num_images)
     
     logger.info(f"Saving images to {cfg.output_dir}")
