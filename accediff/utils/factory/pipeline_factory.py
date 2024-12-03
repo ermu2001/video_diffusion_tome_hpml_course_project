@@ -1,5 +1,6 @@
 import functools
 import itertools
+import os.path as osp
 import math
 from typing import Callable, List, Tuple
 from braceexpand import braceexpand
@@ -69,13 +70,16 @@ def get_sd3_pipeline(repo_id="stabilityai/stable-diffusion-3-medium-diffusers"):
 
 def get_sd3_pipeline_with_lora(
     repo_id="stabilityai/stable-diffusion-3.5-medium",
-    lora_weight_dir=None,
+    lora_weight_path=None,
 ):
     pipe = StableDiffusion3Pipeline.from_pretrained(repo_id, torch_dtype=torch.float16)
     # lora_weight_path = osp.join(lora_weight_dir, 'trnasformer_lora', 'pytorch_lora_weights.safetensors')
+    lora_weight_dir = osp.dirname(lora_weight_path)
+    lora_weight_name = osp.basename(lora_weight_path)
+    assert lora_weight_name.endswith(".safetensors")
     pipe.load_lora_weights(
         lora_weight_dir,
-        weight_name="converted_pytorch_lora_weights.safetensors", 
+        weight_name=lora_weight_name, 
         adapter_name="default",
     )
 

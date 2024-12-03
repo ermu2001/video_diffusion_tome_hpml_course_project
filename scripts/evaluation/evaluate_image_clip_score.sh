@@ -7,7 +7,7 @@ evaluate_image_clip_score () {
 
 # For example
 # output_dir="RESULTS/mj_lr1e-05"
-output_dir=...  
+output_dir=${1} 
 for generation_output_dir in $output_dir/*; do
     if [ ! -f "$generation_output_dir/benchmark_image_generation/generation_info.json" ]; then
         echo "Skipping $generation_output_dir, as it does not contain benchmark_image_generation/generation_info.json"
