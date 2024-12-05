@@ -20,7 +20,7 @@ for num_steps in "${num_steps_list[@]}"; do
     python -m accediff.inference.generate get_pipeline=get_sd35_lora_pipeline get_pipeline.lora_weight_path=${lora_weight_path} \
         generate_kwargs=short \
         generate_kwargs.num_inference_steps=$num_steps \
-        output_root_dir=RESULTS/${output_name}_no_cfg \
+        output_root_dir=RESULTS/${prompt_sources}_${output_name}_no_cfg \
         prompt_sources=${prompt_sources}
 done
 
@@ -28,7 +28,7 @@ done
 for num_steps in "${num_steps_list[@]}"; do
     python -m accediff.inference.generate get_pipeline=get_sd35_lora_pipeline get_pipeline.lora_weight_path=${lora_weight_path} \
         generate_kwargs.num_inference_steps=$num_steps \
-        output_root_dir=RESULTS/${output_name}_cfg \
+        output_root_dir=RESULTS/${prompt_sources}_${output_name}_no_cfg \
         prompt_sources=${prompt_sources}
 done
 
