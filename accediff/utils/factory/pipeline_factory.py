@@ -84,6 +84,7 @@ def get_sd3_pipeline_with_lora(
     )
 
     pipe.fuse_lora()
+    pipe.unload_lora_weights()
     pipe = pipe.to("cuda")
     pipe.set_progress_bar_config(disable=True)
     return pipe

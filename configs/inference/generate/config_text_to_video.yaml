@@ -5,7 +5,8 @@ defaults:
   - get_pipeline: get_covvideox_pipeline
 
 num_videos: 10
-output_dir: outputs/${now:%Y-%m-%d_%H-%M-%S}/generated_videos
+output_root_dir: outputs
+output_dir: ${output_root_dir}/${now:%Y-%m-%d_%H-%M-%S}/benchmark_image_generation
 
 hydra:
   run:

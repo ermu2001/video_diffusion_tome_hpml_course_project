@@ -1,8 +1,0 @@
-defaults:
-  - generate_kwargs: v1
-  - prompt_sources: v1
-  - get_pipeline: get_sd35_quantized_pipeline
-
-
-num_images: 100
-output_dir: tmp/generated_images
