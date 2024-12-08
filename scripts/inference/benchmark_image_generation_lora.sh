@@ -5,8 +5,8 @@
 # requires two arguments:
 # 1. lora_weight_path: the path to the lora weights
 # 2. output_name: the name of the output directory
-if [ "$#" -lt 2 ]; then
-    echo "Usage: $0 lora_weight_path output_name"
+if [ "$#" -lt 3 ]; then
+    echo "Usage: $0 [lora_weight_path] [output_name] [prompt_sources] [additional_args]"
     exit 1
 fi
 
@@ -15,20 +15,25 @@ output_name=${2}
 prompt_sources=${3:-"coco"}
 num_steps_list=(2 4 8 16 32 64)
 
+# shift $@
+shift 3
+
 # benchmarking with short scheduler (guidance scale=0)
 for num_steps in "${num_steps_list[@]}"; do
     python -m accediff.inference.generate get_pipeline=get_sd35_lora_pipeline get_pipeline.lora_weight_path=${lora_weight_path} \
         generate_kwargs=short \
         generate_kwargs.num_inference_steps=$num_steps \
         output_root_dir=RESULTS/${prompt_sources}_${output_name}_no_cfg \
-        prompt_sources=${prompt_sources}
+        prompt_sources=${prompt_sources} \
+        $@
 done
 
 # benchmarking with origin scheduler (guidance scale=7.0)
 for num_steps in "${num_steps_list[@]}"; do
     python -m accediff.inference.generate get_pipeline=get_sd35_lora_pipeline get_pipeline.lora_weight_path=${lora_weight_path} \
         generate_kwargs.num_inference_steps=$num_steps \
-        output_root_dir=RESULTS/${prompt_sources}_${output_name}_no_cfg \
-        prompt_sources=${prompt_sources}
+        output_root_dir=RESULTS/${prompt_sources}_${output_name}_cfg \
+        prompt_sources=${prompt_sources} \
+        $@
 done
 
