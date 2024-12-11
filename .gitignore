@@ -6,3 +6,4 @@ slurm_logs/
 debug_out/
 MODELS/
 RESULTS/
+outputs*

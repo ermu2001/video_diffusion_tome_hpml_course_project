@@ -1,16 +1,10 @@
-defaults:
-  - _self_
-  - generate_kwargs: video
-  - prompt_sources: v1
-  - get_pipeline: get_covvideox_pipeline
-
-num_videos: 50
-output_root_dir: outputs_videos
-output_dir: ${output_root_dir}/${now:%Y-%m-%d_%H-%M-%S}/benchmark_video_generation
+generation_output_dir: ...
+gt_json_file: ${hydra:runtime.cwd}/RESULTS/midjv6_gt/annotations.json
+gt_images_folder: ${hydra:runtime.cwd}/RESULTS/midjv6_gt/images
 
 hydra:
   run:
-    dir: ${output_dir}
+    dir: ${generation_output_dir}
   job_logging:
     version: 1
     disable_existing_loggers: false
@@ -27,7 +21,7 @@ hydra:
         class: logging.FileHandler
         formatter: simple
         level: DEBUG
-        filename: ${output_dir}/text_to_video_generation.log
+        filename: ${generation_output_dir}/image_fid_score_evaluation.log
     root:
       level: DEBUG
       handlers: [file, console]

@@ -6,7 +6,7 @@ import itertools
 from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 from diffusers.utils import export_to_video
-
+import os.path as osp
 from accediff import LOCAL_PATH
 from accediff.utils.utils import benchmark_time_iterator
 from accediff.utils.factory.prompt_factory import iter_prompts
@@ -21,7 +21,7 @@ def iter_generate_prompt2video(
     diffusion_kwargs,
 ):
     for prompt in itertools.islice(iter_prompts(prompt_sources), num_total):
-        yield pipe(prompt, **diffusion_kwargs).frames[0]
+        yield pipe(prompt, **diffusion_kwargs).frames[0], prompt
 
 @hydra.main(version_base=None, config_path=f"{LOCAL_PATH}/configs/inference/generate", config_name="config_text_to_video")
 def main(cfg: DictConfig):
@@ -40,10 +40,12 @@ def main_generate(cfg: DictConfig):
     )
     frames_progress_bar = tqdm(generated_image_iterator, total=cfg.num_videos)
     
-    logger.info(f"Saving videos to {cfg.output_dir}")
-    os.makedirs(cfg.output_dir, exist_ok=True)
-    for i, frames in enumerate(frames_progress_bar):
-        export_to_video(frames, f"{cfg.output_dir}/{i}.mp4", fps=8)
+    video_output_dir = osp.join(cfg.output_dir, "videos")
+    logger.info(f"Saving videos to {video_output_dir}")
+    os.makedirs(video_output_dir, exist_ok=True)
+    for i, (frames, prompt) in enumerate(frames_progress_bar):
+        prompt.strip('.')
+        export_to_video(frames, f"{video_output_dir}/{prompt}.mp4", fps=8)
 
 
 if __name__ == "__main__":

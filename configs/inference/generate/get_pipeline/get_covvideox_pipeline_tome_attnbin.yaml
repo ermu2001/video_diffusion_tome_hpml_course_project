@@ -2,7 +2,7 @@ _target_: accediff.utils.factory.pipeline_factory.get_cogvideox_pipeline_with_to
 repo_id: "THUDM/CogVideoX-2b"
 hook_kwargs:
   merge_ratio: 0.3
-  sb: 40
+  sb: 216
 tome_modele_names:
   # # this slighly improves the output quality
   # # tome all
