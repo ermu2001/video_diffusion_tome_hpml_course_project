@@ -1,7 +1,0 @@
-dataset_cls: accediff.train.dataset.SDText2ImageDataset
-train_shards_path_or_url: "pipe:curl -L -s https://huggingface.co/datasets/laion/conceptual-captions-12m-webdataset/resolve/main/data/{00000..01099}.tar?download=true -H 'Authorization:Bearer ${hf_token}'"
-resolution: 1024
-interpolation_type: "bilinear"
-center_crop: false
-random_flip: false
-dataloader_num_workers: 8

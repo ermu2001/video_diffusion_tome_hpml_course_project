@@ -1,3 +1,0 @@
-_target_: accediff.utils.factory.pipeline_factory.get_sd3_pipeline_with_lora
-repo_id: "stabilityai/stable-diffusion-3.5-medium"
-lora_weight_path: null

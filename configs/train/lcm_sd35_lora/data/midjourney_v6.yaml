@@ -1,8 +1,0 @@
-dataset_cls: accediff.train.dataset.MidjourneyText2ImageDataset
-# path to your own jsonl shards, or set up DATAS same like me.
-train_shards_path_or_url: "${hydra:runtime.cwd}/DATAS/midjourney-v6-jsonl-shards/shard_{00000..01000}.jsonl"
-resolution: 1024
-interpolation_type: "bilinear"
-center_crop: false
-random_flip: false
-dataloader_num_workers: 8

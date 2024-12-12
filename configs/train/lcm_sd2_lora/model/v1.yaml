@@ -1,4 +1,0 @@
-pretrained_teacher_model: stable-diffusion-v1-5/stable-diffusion-v1-5  # Required
-pretrained_vae_model_name_or_path: null
-teacher_revision: null
-revision: null

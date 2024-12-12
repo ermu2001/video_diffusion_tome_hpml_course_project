@@ -1,5 +1,0 @@
-pretrained_teacher_model: stabilityai/stable-diffusion-3.5-large  # Required
-pretrained_student_model: stabilityai/stable-diffusion-3.5-medium  # Required
-pretrained_vae_model_name_or_path: null
-teacher_revision: null
-revision: null
