@@ -19,6 +19,6 @@ benchmark_naive_tome_attnbin () {
 }
 
 
-# benchmark_origin
+benchmark_origin
 benchmark_naive_tome_3d
 benchmark_naive_tome_attnbin
