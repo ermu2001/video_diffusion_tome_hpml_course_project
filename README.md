@@ -70,6 +70,8 @@ From experiments, the attnbin approach is suboptimal. This indicates that naivel
 
 ![dc8670ba82f673f5fb5a50a40b6d122](https://github.com/user-attachments/assets/cff07ac8-3b00-47ef-bf92-82cfdb4e0151)
 
+# 💫 Acknowledgement
 
-
-
+- [ToMe](https://github.com/dbolya/tomesd): Amazing Training Free Efficient Extension for Stable Diffusion
+- [hydra](https://github.com/facebookresearch/hydra): Configuration system for experiments of repo
+- [diffusers](https://github.com/huggingface/diffusers): SOTA image/video generative DL model pakcage
