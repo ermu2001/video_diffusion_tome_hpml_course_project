@@ -58,7 +58,8 @@ python python_scripts/benchmark_video_generation_2.py
 python python_scripts/benchmark_video_generation_1.py
 ```
 # Results and Observations  
-This section mainly introduces some of our results and experiments.
+This section mainly introduces some of our results and experiments. All the videos we have generated could be find [here](https://huggingface.co/ermu2001/RESULTS), all our experiments are run a one H100.
+
 ## Merging Strategy
 From experiments, the attnbin approach is suboptimal. This indicates that naively sorting with norm of tokens does not represent the structure for transformer tokens. More is to be done!
 ![2400702f9040c3e5466bbeb7274e532](https://github.com/user-attachments/assets/47aabfd0-5735-4f6e-bc27-27128e00e67f)
